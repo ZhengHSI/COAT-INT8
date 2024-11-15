@@ -24,7 +24,7 @@ By leveraging FP8 precision, COAT significantly decreases memory usage by 1.54×
 
 ## 🔥 News
 
-- [2024/10] [COAT paper](https://arxiv.org/abs/2410.19313) is released on Arxiv!
+- [2024/10] [[paper]](https://arxiv.org/abs/2410.19313) is on arxiv!
 
 ## 📚 Abstract
 FP8 training has emerged as a promising method for improving training efficiency. Existing frameworks accelerate training by applying FP8 computation to linear layers while leaving optimizer states and activations in higher precision, which fails to fully optimize memory usage. This paper introduces COAT (**C**ompressing **O**ptimizer States and **A**ctivations for FP8 **T**raining), a novel FP8 training framework designed to significantly reduce memory footprint when training large models. 
