@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "coat"
+version = "1.0.0"
+description = "COAT: Compressing Optimizer states and Activation for Memory-Efficient FP8 Training"
+readme = "README.md"
+requires-python = ">=3.9"
+classifiers = [
+    "Programming Language :: Python :: 3",
+]
+dependencies = [
+    "torch>=2.4.1",
+    "triton==3.1.0",
+    "transformers==4.45.2",
+    "wandb==0.18.5",
+    "matplotlib==3.9.2",
+    "gdown==5.2.0",
+    "peft",
+    "sentencepiece"
+]
+
+[project.urls]
+"Homepage" = "TODO"
+"Bug Tracker" = "TODO"
+
+[tool.black]
+line-length = 120

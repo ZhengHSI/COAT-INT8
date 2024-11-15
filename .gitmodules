@@ -1,0 +1,6 @@
+[submodule "examples/OLMo"]
+    path = examples/OLMo
+    url = https://github.com/xijiu9/OLMo
+[submodule "examples/ToolBench"]
+	path = examples/ToolBench
+	url = https://github.com/xijiu9/ToolBench
