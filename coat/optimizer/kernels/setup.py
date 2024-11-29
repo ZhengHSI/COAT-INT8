@@ -37,6 +37,7 @@ setup(
                     "-O3",
                     "-std=c++17",
                     "-gencode=arch=compute_90,code=compute_90",
+                    "-gencode=arch=compute_89,code=compute_89",
                     "-DTORCH_USE_CUDA_DSA",
                     "-U__CUDA_NO_HALF_OPERATORS__",
                     "-U__CUDA_NO_HALF_CONVERSIONS__",
