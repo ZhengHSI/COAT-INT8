@@ -22,5 +22,5 @@ pip install -e .
 
 # install fp8 optimizer
 cd coat/optimizer/kernels/
-python setup.py install
+TORCH_CUDA_ARCH_LIST="8.9 9.0" python setup.py install
 
