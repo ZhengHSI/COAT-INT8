@@ -15,10 +15,10 @@ fi
 
 # This is required to enable PEP 660 support
 pip install --upgrade pip setuptools
-pip install flash-attn==2.6.3 --no-build-isolation
 
 # install coat
 pip install -e .
+pip install flash-attn==2.6.3 --no-build-isolation
 
 # install fp8 optimizer
 cd coat/optimizer/kernels/
