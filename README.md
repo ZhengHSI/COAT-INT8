@@ -74,16 +74,8 @@ We validated the effectiveness of our method using real-world examples. In the I
   <img src="docs/figs/VILAExample.png" width="90%" alt="logo"/>
 </p>
 
-<style>
-h3 {
-    text-align: center;
-}
-</style>
-
 ## 🔍 Key Observations
-<div align="center">
-<h3> Part1: FP8 Optimizer </h3>
-</div>
+### Part1: FP8 Optimizer
 
 #### Difficulty of FP8 quantization for optimizer states
 We find that current quantization methods can not fully utilize the representation range of FP8 and therefore lead to a large quantization error when quantizing optimizer states with per-group quantization. For the <a href="https://arxiv.org/abs/2209.05433" target="_blank">E4M3 format</a>, we hope the dynamic range of the quantization group X should cover the entire span between the minimum representable value of E4M3 (0.00195) and the maximum representable value of E4M3 (448) to fully utilize its representation ability. However, the dynamic range of E4M3 is usually **under-utilized**: The dynamic range of E4M3 is about 2e5, but the dynamic range of first order momentum is usually 1e3, and the dynamic range of second order momentum is usually 1e1. This make the quantization error really large.
@@ -103,9 +95,7 @@ where k is a parameter we calculate on-the-fly. When k > 1 , the dynamic range w
   <img src="docs/figs/RangeExpansion.png" width="90%" alt="logo"/>
 </p>
 
-<div align="center">
-<h3> Part2: FP8 Activation </h3>
-</div>
+### Part2: FP8 Activation
 
 #### Motivation: Non-linear layers costs large memory footprint
 In the forward pass of neural networks, activations must be preserved for the backward pass to calculate gradients. Non-linear layers typically account for approximately 50% of the memory footprint in the Llama model series. In contrast, linear layers contribute less than 25%. Therefore, it is essential to optimize both linear and non-linear layers to reduce activation memory footprint.
