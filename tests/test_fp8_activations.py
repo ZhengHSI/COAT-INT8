@@ -127,8 +127,7 @@ def _test_silu_bwd(x, qx, sx, g, BS, SL, CDIM, QB, fp8type):
         x.grad, BS, SL, CDIM, QB, fp8type, per_tensor=True
     )  # .to(bfloat16) since gradients are of bfloat16
 
-    g_triton, s_triton = fp8_silu_backward(qx, sx, g, QB, fp8type)
-    grad_triton = dequantize_tensor(g_triton, s_triton, BS, SL, CDIM, QB)  # dequantize per-tensor quantization
+    grad_triton, _ = fp8_silu_backward(qx, sx, g, QB, fp8type)
 
     return grad_torch, grad_triton
 
@@ -177,9 +176,8 @@ def _test_mul_bwd(x1, qx1, sx1, x2, qx2, sx2, g, BS, SL, CDIM, QB, fp8type):
     output_torch1 = x1.grad.to(torch.bfloat16)
     output_torch2, _, __ = quantize_tensor(x2.grad, BS, SL, CDIM, QB, fp8type, per_tensor=True)
 
-    g1_triton, g2_triton, s2_triton = fp8_mul_backward(qx1, sx1, qx2, sx2, g, QB, fp8type)
+    g1_triton, (output_triton2, _) = fp8_mul_backward(qx1, sx1, qx2, sx2, g, QB, fp8type)
     output_triton1 = g1_triton
-    output_triton2 = dequantize_tensor(g2_triton, s2_triton, BS, SL, CDIM, QB)
 
     return output_torch1, output_triton1, output_torch2, output_triton2
 

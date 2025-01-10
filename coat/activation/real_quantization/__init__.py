@@ -11,6 +11,7 @@ from .add_bwd import fp8_add_Ifp_Ifp_Ofp_Opt
 from .add_fwd import fp8_add_Ifp_Ifp_Ofp_Og16
 # Normalization
 from .func_layernorm_noparam import fp8_layernorm_noparam_backward, fp8_layernorm_noparam_forward
+from .func_layernorm_param import fp8_layernorm_param_backward, fp8_layernorm_param_forward
 from .func_quantize import Coat_quantize_bgn, Coat_quantize_end
 from .func_rmsnorm import fp8_rmsnorm_backward, fp8_rmsnorm_forward
 from .gelu_bwd import fp8_gelu_backward
