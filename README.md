@@ -2,7 +2,7 @@
   <img src="docs/figs/COAT.png" width="30%" alt="logo"/>
 </p>
 
-# 🚀COAT: Compressing Optimizer States and Activation for Memory-Efficient FP8 Training
+# 🚀[ICLR 2025] COAT: Compressing Optimizer States and Activation for Memory-Efficient FP8 Training
 
 ### [[paper]](https://arxiv.org/abs/2410.19313) [[website]](https://nvlabs.github.io/COAT/)
 
@@ -23,7 +23,7 @@ This technique allows:
 By leveraging FP8 precision, COAT significantly decreases memory usage by 1.54×, which is critical for training large models on limited hardware resources.
 
 ## 🔥 News
-
+- [2025/01] COAT is accepted by ICLR 2025!
 - [2024/10] [[paper]](https://arxiv.org/abs/2410.19313) is on arxiv!
 
 ## 📚 Abstract
