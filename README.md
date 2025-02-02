@@ -285,13 +285,10 @@ If you have some problem when installing `qoptim_cuda`, you can try to install c
 
 ## Citation
 ```
-@misc{xi2024coatcompressingoptimizerstates,
-      title={COAT: Compressing Optimizer states and Activation for Memory-Efficient FP8 Training}, 
-      author={Haocheng Xi and Han Cai and Ligeng Zhu and Yao Lu and Kurt Keutzer and Jianfei Chen and Song Han},
-      year={2024},
-      eprint={2410.19313},
-      archivePrefix={arXiv},
-      primaryClass={cs.LG},
-      url={https://arxiv.org/abs/2410.19313}, 
+@article{xi2024coat,
+  title={COAT: Compressing Optimizer states and Activation for Memory-Efficient FP8 Training},
+  author={Xi, Haocheng and Cai, Han and Zhu, Ligeng and Lu, Yao and Keutzer, Kurt and Chen, Jianfei and Han, Song},
+  journal={arXiv preprint arXiv:2410.19313},
+  year={2024}
 }
 ```
