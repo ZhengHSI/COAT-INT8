@@ -961,10 +961,6 @@ class QuantActivationConfig(BaseConfig):
     Prevent the scale to overflow to inf. Prevent the max value of a tensor is too small.
     """
 
-    qchoice: Optional[list[str]] = None
-    """
-    What part of the QOLMo to be quantized
-    """
 
     refine_attn_blocksize: Optional[bool] = False
     """

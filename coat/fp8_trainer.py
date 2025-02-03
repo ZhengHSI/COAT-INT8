@@ -155,9 +155,10 @@ class CoatFP8Trainer(Trainer):
             optimizer_kwargs2 = {
                 "lr": self.args.learning_rate,
                 "betas": (self.args.adam_beta1, self.args.adam_beta2),
-                "eps": self.args.adam_epsilon
+                "eps": self.args.adam_epsilon,
+                "qargs": self.qargs
             }
-            self.optimizer = CoatAdamW(self.qargs, optimizer_grouped_parameters, **optimizer_kwargs2)
+            self.optimizer = CoatAdamW(optimizer_grouped_parameters, **optimizer_kwargs2)
 
         return self.optimizer
     

@@ -43,10 +43,6 @@ chmod +x environment_setup.sh
 ./environment_setup.sh coat
 
 conda activate coat
-
-# Install OLMo
-cd examples/OLMo/
-pip install -e .[all]
 ```
 
 ## 📊 Memory Saving, Speedup, and Accuracy
@@ -207,10 +203,17 @@ bash scripts/train_toolllama_bf16.sh
 
 ## 📖 Examples: OLMo Pretraining
 ### Dataset
-First Prepare the training data and validation data following the instructions in OLMo's readme.
+First Prepare the training data, validation data and the environment.
 ```bash
-# An example to download the Dolma dataset
-wget https://olmo-data.org/preprocessed/olmo-mix/v1_5/gpt-neox-20b-pii-special/part-000-00000.npy
+# Download the subset of Dolma dataset
+cd examples/OLMo/
+mkdir -p datasets/dolma/v1_5
+wget -O datasets/dolma/v1_5/part-000-00000.npy https://olmo-data.org/preprocessed/olmo-mix/v1_5/gpt-neox-20b-pii-special/part-000-00000.npy
+
+
+# Install the environment.
+cd examples/OLMo/
+pip install -e .[all]
 ```
 
 ### Training script for OLMo 1B
