@@ -15,15 +15,7 @@ if [ "$SKIP" = false ]; then
 
     python $COAT_PATH/coat/activation/models/coat_llama_convert_from_hf.py \
         --model_name $MODEL_NAME \
-        --save_path $CONVERTED_MODEL_PATH \
-        --quantize_model true \
-        --fabit E4M3 \
-        --fwbit E4M3 \
-        --fobit E4M3 \
-        --bwbit E5M2 \
-        --babit E5M2 \
-        --bobit E5M2 \
-        --group_size 16
+        --save_path $CONVERTED_MODEL_PATH
 fi
 
 # We double the batch size here
@@ -36,9 +28,9 @@ torchrun --nproc_per_node=4 --master_port=20001 toolbench/train/train_fp8.py \
     --bf16 True \
     --output_dir toolllama \
     --num_train_epochs 1 \
-    --per_device_train_batch_size 4 \
+    --per_device_train_batch_size 2 \
     --per_device_eval_batch_size 2 \
-    --gradient_accumulation_steps 1 \
+    --gradient_accumulation_steps 4 \
     --evaluation_strategy "epoch" \
     --prediction_loss_only \
     --save_strategy "epoch" \
@@ -54,19 +46,21 @@ torchrun --nproc_per_node=4 --master_port=20001 toolbench/train/train_fp8.py \
     --source_model_max_length 4096 \
     --model_max_length 4096 \
     --lazy_preprocess True \
-    --report_to wandb \
-    --quantize_model true \
-    --fabit E4M3 \
-    --fwbit E4M3 \
-    --fobit E4M3 \
-    --bwbit E5M2 \
-    --babit E5M2 \
-    --bobit E5M2 \
-    --group_size 16 \
-    --first_order_expansion true \
-    --second_order_expansion true \
-    --first_order_bit E4M3 \
-    --second_order_bit E4M3 \
-    --qgroup_size 128 \
-    --expand_min 16
+    --report_to wandb
+
+    # Below are the default value for FP8 training
+    # --quantize_model true \
+    # --fabit E4M3 \
+    # --fwbit E4M3 \
+    # --fobit E4M3 \
+    # --bwbit E5M2 \
+    # --babit E5M2 \
+    # --bobit E5M2 \
+    # --group_size 16 \
+    # --first_order_expansion true \
+    # --second_order_expansion true \
+    # --first_order_bit E4M3 \
+    # --second_order_bit E4M3 \
+    # --qgroup_size 128 \
+    # --expand_min 16
 

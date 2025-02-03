@@ -26,7 +26,7 @@ from torch import Tensor
 from torch.optim.optimizer import Optimizer
 from typing_extensions import ParamSpec, Self, TypeAlias
 
-from ..activation.models._fp8_quantization_config import QuantizationConfig
+from ..utils._fp8_quantization_config import QuantizationConfig
 
 StateDict: TypeAlias = Dict[str, Any]
 

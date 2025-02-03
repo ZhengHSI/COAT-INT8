@@ -6,9 +6,9 @@ from transformers import AutoModelForCausalLM, AutoConfig
 from typing import Optional
 from dataclasses import dataclass, field, asdict
 
-from coat.activation.models.coat_llama import make_state_dict_compatible
-from coat.activation.models.coat_llama import CoatLlamaForCausalLM, CoatLlamaConfig
-from coat.activation.models._fp8_quantization_config import QuantizationConfig
+from ..models.coat_llama import make_state_dict_compatible
+from ..models.coat_llama import CoatLlamaForCausalLM, CoatLlamaConfig
+from ..utils._fp8_quantization_config import QuantizationConfig
 
 
 @dataclass

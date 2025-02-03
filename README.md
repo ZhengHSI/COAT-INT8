@@ -26,13 +26,6 @@ By leveraging FP8 precision, COAT significantly decreases memory usage by 1.54×
 - [2025/01] COAT is accepted by ICLR 2025!
 - [2024/10] [[paper]](https://arxiv.org/abs/2410.19313) is on arxiv!
 
-## 📚 Abstract
-FP8 training has emerged as a promising method for improving training efficiency. Existing frameworks accelerate training by applying FP8 computation to linear layers while leaving optimizer states and activations in higher precision, which fails to fully optimize memory usage. This paper introduces COAT (**C**ompressing **O**ptimizer States and **A**ctivations for FP8 **T**raining), a novel FP8 training framework designed to significantly reduce memory footprint when training large models. 
-
-COAT addresses current limitations through two key innovations: (1) **Dynamic Range Expansion**, which aligns optimizer state distributions more closely with the FP8 representation range, thereby reducing quantization error, and (2) **Mixed-Granularity Activation Quantization**, which optimizes activation memory using a combination of per-tensor and per-group quantization strategies. 
-
-Experiments demonstrate that COAT effectively reduces end-to-end training memory footprint by **1.54×** compared to BF16 while achieving nearly lossless performance across various tasks, such as Large Language Model pretraining and fine-tuning and Vision Language Model training. COAT also achieves a **1.43×** end-to-end training speedup compared to BF16, performing on par with or surpassing TransformerEngine's speedup. COAT enables efficient full-parameter training of large models on fewer GPUs, and facilitates doubling the batch size in distributed training settings, providing a practical solution for scaling large-scale model training.
-
 ## ⚙️ Installation
 ```bash
 git clone --recurse-submodules https://github.com/NVlabs/COAT.git
@@ -44,6 +37,60 @@ chmod +x environment_setup.sh
 
 conda activate coat
 ```
+
+## 🛠️ How to use
+We have support Llama 2/3 to use COAT FP8 activation and FP8 optimizer feature. 
+
+We have combine them with transformers's Trainer and AutoModel, so just need several lines of code to use COAT.
+
+### Save optimizer memory using FP8 Optimizer
+To use the FP8 Optimizer feature:
+```python
+from coat.fp8_trainer import CoatFP8Trainer
+
+# bf16
+optimizer_bf16 = torch.optim.AdamW(param_groups, **optimizer_kwargs)
+# fp8
+optimizer_coat = CoatAdamW(param_groups, **optimizer_kwargs)
+```
+
+We are also compatible with transformers [Trainer](https://huggingface.co/docs/transformers/en/main_classes/trainer):
+```python
+  from types import MethodType
+  from coat.fp8_trainer import CoatFP8Trainer
+  trainer = Trainer(
+      model=fp8_model, ...
+  )
+  trainer.create_optimizer = MethodType(CoatFP8Trainer.create_optimizer, trainer)
+```
+
+### Save activation memory using FP8 Activation
+
+To use the FP8 activation feature, please first convert your model into COAT's format:
+```bash
+python coat/activation/models/coat_llama_convert_from_hf.py \
+    --model_name "meta-llama/Llama-2-7b-hf" \
+    --save_path "converted_models/llama-2-7b"
+```
+
+Then load the converted checkpoints using [AutoModelForCausalLM](https://huggingface.co/docs/transformers/en/model_doc/auto).
+```python
+# Register CoatLlama for the AutoModel
+from coat.models.coat_llama import CoatLlamaForCausalLM, make_state_dict_compatible
+
+# Load the converted checkpoint to support COAT for FP8 activation
+fp8_model = transformers.AutoModelForCausalLM.from_pretrained(
+    converted_fp8_model_name_or_path,
+    device_map=device_map
+)
+```
+
+## 📚 Abstract
+FP8 training has emerged as a promising method for improving training efficiency. Existing frameworks accelerate training by applying FP8 computation to linear layers while leaving optimizer states and activations in higher precision, which fails to fully optimize memory usage. This paper introduces COAT (**C**ompressing **O**ptimizer States and **A**ctivations for FP8 **T**raining), a novel FP8 training framework designed to significantly reduce memory footprint when training large models. 
+
+COAT addresses current limitations through two key innovations: (1) **Dynamic Range Expansion**, which aligns optimizer state distributions more closely with the FP8 representation range, thereby reducing quantization error, and (2) **Mixed-Granularity Activation Quantization**, which optimizes activation memory using a combination of per-tensor and per-group quantization strategies. 
+
+Experiments demonstrate that COAT effectively reduces end-to-end training memory footprint by **1.54×** compared to BF16 while achieving nearly lossless performance across various tasks, such as Large Language Model pretraining and fine-tuning and Vision Language Model training. COAT also achieves a **1.43×** end-to-end training speedup compared to BF16, performing on par with or surpassing TransformerEngine's speedup. COAT enables efficient full-parameter training of large models on fewer GPUs, and facilitates doubling the batch size in distributed training settings, providing a practical solution for scaling large-scale model training.
 
 ## 📊 Memory Saving, Speedup, and Accuracy
 ### Memory Saving and Speedup
@@ -115,83 +162,20 @@ To perform per-tensor quantization, the maximum absolute value of the tensor nee
 </p>
 
 
-## 📖 Examples - Llama-2 model training
+## 📖 Examples - Llama-2 model fine-tuning
+In this example, we show how to fine-tune a Llama-2 model using COAT on [ToolBench](https://github.com/OpenBMB/ToolBench)!
 
-### Use COAT's FP8 Activation and FP8 Optimizer
-We have support Llama 2/3 to use COAT FP8 activation and FP8 optimizer feature.
-Just need several lines of code to support COAT.
-
-To use the FP8 activation feature, please first convert your model into COAT's format:
-```bash
-export MODEL_NAME="meta-llama/Llama-2-7b-hf"
-export CONVERTED_MODEL_PATH="converted_models/llama-2-7b"
-
-export COAT_PATH=$(pip show coat | grep "Editable project location" | awk -F': ' '{print $2}')
-echo "COAT package is located at: $COAT_PATH"
-
-python $COAT_PATH/coat/activation/models/coat_llama_convert_from_hf.py \
-    --model_name $MODEL_NAME \
-    --save_path $CONVERTED_MODEL_PATH \
-    --quantize_model true \
-    --fabit E4M3 \
-    --fwbit E4M3 \
-    --fobit E4M3 \
-    --bwbit E5M2 \
-    --babit E5M2 \
-    --bobit E5M2 \
-    --group_size 16
-```
-
-To use the FP8 optimizer feature, add these arguments to your training script:
-```bash
-    --first_order_expansion true \
-    --second_order_expansion true \
-    --first_order_bit E4M3 \
-    --second_order_bit E4M3 \
-    --qgroup_size 128 \
-    --expand_min 16
-```
-
-Then add these lines to enable FP8 Activation and FP8 Optimizer in the training process
-```python
-# import coat
-from coat.activation.models._fp8_quantization_config import QuantizationConfig
-from coat.fp8_trainer import CoatFP8Trainer
-
-@dataclass
-class ModelArguments:
-    model_name_or_path: Optional[str] = field(default="facebook/opt-125m")
-    # fp8_model_name_or_path is the CONVERTED_MODEL_PATH you create in the section above
-    fp8_model_name_or_path: Optional[str] = field(default="facebook/opt-125m")
-
-def train():
-    # ----- some irrelevant code -----
-    # Add the quantization argument for FP8 optimizer states
-    parser = transformers.HfArgumentParser( # NOTE: FP8
-        (ModelArguments, DataArguments, TrainingArguments, QuantizationConfig)
-    )
-
-    # Load the converted checkpoint to support COAT for FP8 activation
-    fp8_model = transformers.AutoModelForCausalLM.from_pretrained(
-        model_args.fp8_model_name_or_path,
-        cache_dir=training_args.cache_dir,
-        device_map=device_map
-    )
-    fp8_model.config.use_cache = False
-
-    # Replace the trainer with ours trainer
-    trainer = CoatFP8Trainer(
-        model=fp8_model, tokenizer=tokenizer, args=training_args, coat_args=quantization_args, **data_module
-    )
-```
-
-An example for the process above is to run the following code to start a real FP8 training example on [ToolBench](https://github.com/OpenBMB/ToolBench)!
+### Data Preparation
 ```bash
 cd examples/ToolBench
 # Download the data ToolBench requires
 gdown --id 1XFjDxVZdUY7TXYF2yvzx3pJlS2fy78jk --output data.zip
 # Unzip the data
 python preprocess/unzip_finetune_data.py
+```
+
+### Convert the checkpoint and do FP8 Training
+```bash
 
 # Run COAT FP8 Training on Llama-2-7B, should achieve 2.80s/it on 8 * H100, which is 26% speedup compared with BF16 training.
 bash scripts/train_toolllama_fp8.sh
@@ -202,7 +186,9 @@ bash scripts/train_toolllama_bf16.sh
 
 
 ## 📖 Examples: OLMo Pretraining
-### Dataset
+In this example, we show how to pretrain a OLMo-1B/7B model from scratch.
+
+### Data Preparation
 First Prepare the training data, validation data and the environment.
 ```bash
 # Download the subset of Dolma dataset

@@ -22,4 +22,4 @@ class FP8Manager:
     FP8 state at different stages of execution.
     """
 
-    is_first_microbatch = False
+    is_first_microbatch = True

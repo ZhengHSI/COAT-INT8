@@ -42,7 +42,7 @@ class QuantizationConfig:
         babit: str = "E5M2",
         bwbit: str = "E5M2",
         bobit: str = "E5M2",
-        group_size: int = -1,
+        group_size: int = 16,
         pad_to_multiple_of: int = 0,
         weight_memory_efficient: bool = True,
         first_order_expansion: bool = True,
