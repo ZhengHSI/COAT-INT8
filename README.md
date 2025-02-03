@@ -107,6 +107,10 @@ Overall, COAT significantly reduces end-to-end memory usage by up to $1.55\times
 We pretrained the [OLMo-1B and OLMo-7B](https://github.com/allenai/OLMo.git) models on Dolma, as outlined in the official report. The training curves and downstream task performance aligned closely with the results from BF16 training and the TransformerEngine baseline, confirming the effectiveness of COAT.
 
 <p align="center" style="border-radius: 10px">
+  <img src="docs/figs/OLMo-1B7BLossCurve.png" width="90%" alt="logo"/>
+</p>
+
+<p align="center" style="border-radius: 10px">
   <img src="docs/figs/OLMo-1B7BTraining.png" width="90%" alt="logo"/>
 </p>
 
