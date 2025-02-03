@@ -1,5 +1,5 @@
 import torch.nn as nn
-from ..real_quantization import fp8_division_transpose
+from ..activation.real_quantization import fp8_division_transpose
 
 class FP8CacheWeightModule(nn.Module):
     def __init__(self, config, qargs, layer_id):

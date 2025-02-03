@@ -19,6 +19,7 @@
 # limitations under the License.
 import math
 from fnmatch import fnmatch
+from functools import lru_cache
 from typing import List, Optional, Tuple, Union
 import os
 import torch
@@ -69,8 +70,8 @@ from transformers.models.llama.modeling_llama import (
 from transformers.models.llama.configuration_llama import LlamaConfig
 
 # FP8 related
-from ._fp8_quantization_config import QuantizationConfig
-from ..real_quantization import (Coat_quantize_bgn, Coat_quantize_end,
+from ..utils._fp8_quantization_config import QuantizationConfig
+from ..activation.real_quantization import (Coat_quantize_bgn, Coat_quantize_end,
                                  fp8_add_Ifp_Ifp_Ofp_Og16,
                                  fp8_add_Ifp_Ifp_Ofp_Opt, fp8_division,
                                  fp8_division_transpose, fp8_gelu_backward,
@@ -84,9 +85,21 @@ from ..real_quantization import (Coat_quantize_bgn, Coat_quantize_end,
                                  fp8_rmsnorm_backward, fp8_rmsnorm_forward,
                                  fp8_silu_backward, fp8_silu_forward,
                                  fp8_transpose)
-from ._fp8manager import FP8Manager
-from ._fp8_weightcache import FP8CacheWeightModule
+from ..activation.liger.cross_entropy import LigerForCausalLMLoss
 
+from ..utils._fp8manager import FP8Manager
+from ..utils._fp8_weightcache import FP8CacheWeightModule
+
+__all__ = [
+    "CoatLlamaConfig",
+    "CoatLlamaBeforeAttentionResidual",
+    "CoatLlamaAfterAttentionResidual",
+    "CoatLlamaMLPResidual",
+    "CoatLlamaDecoderLayer",
+    "CoatLlamaPreTrainedModel",
+    "CoatLlamaModel",
+    "CoatLlamaForCausalLM",
+]
 
 logger = logging.get_logger(__name__)
 
@@ -1389,6 +1402,11 @@ class CoatLlamaForCausalLM(CoatLlamaPreTrainedModel, GenerationMixin):
 
     def get_decoder(self):
         return self.model
+
+    @property
+    @lru_cache
+    def loss_function(self):
+        return LigerForCausalLMLoss
 
     forward = LlamaForCausalLM.forward
 

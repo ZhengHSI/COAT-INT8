@@ -1,7 +1,7 @@
 export PYTHONPATH=./
-export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
+export CUDA_VISIBLE_DEVICES=4,5,6,7
 
-torchrun --nproc_per_node=8 --master_port=20001 toolbench/train/train.py \
+torchrun --nproc_per_node=4 --master_port=20001 toolbench/train/train.py \
     --model_name_or_path meta-llama/Llama-2-7b-hf  \
     --data_path  data/toolllama_G123_dfs_train.json \
     --eval_data_path  data/toolllama_G123_dfs_eval.json \
@@ -9,9 +9,9 @@ torchrun --nproc_per_node=8 --master_port=20001 toolbench/train/train.py \
     --bf16 True \
     --output_dir toolllama \
     --num_train_epochs 1 \
-    --per_device_train_batch_size 2 \
+    --per_device_train_batch_size 1 \
     --per_device_eval_batch_size 2 \
-    --gradient_accumulation_steps 2 \
+    --gradient_accumulation_steps 8 \
     --evaluation_strategy "epoch" \
     --prediction_loss_only \
     --save_strategy "epoch" \

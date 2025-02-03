@@ -30,8 +30,8 @@ from toolbench.model.model_adapter import get_conversation_template
 from toolbench.train.llama_condense_monkey_patch import replace_llama_with_condense
 
 # NOTE: FP8
-from coat.activation.models.coat_llama import CoatLlamaForCausalLM, make_state_dict_compatible # You must import it to register for AutoModelForCausalLM
-from coat.activation.models._fp8_quantization_config import QuantizationConfig
+from coat.models.coat_llama import CoatLlamaForCausalLM, make_state_dict_compatible # You must import it to register for AutoModelForCausalLM, although it is not being used
+from coat.utils._fp8_quantization_config import QuantizationConfig
 from coat.fp8_trainer import CoatFP8Trainer
 
 IGNORE_TOKEN_ID = LabelSmoother.ignore_index
@@ -286,9 +286,15 @@ def train():
     fp8_model.config.use_cache = False
 
     # We need this trainer to specify FP8Manager.is_first_microstep
-    trainer = CoatFP8Trainer(
-        model=fp8_model, tokenizer=tokenizer, args=training_args, coat_args=quantization_args, **data_module
+    trainer = Trainer(
+        model=fp8_model, tokenizer=tokenizer, args=training_args, **data_module
     )
+    from types import MethodType
+    trainer.qargs = quantization_args
+    trainer.create_optimizer = MethodType(CoatFP8Trainer.create_optimizer, trainer)
+    # trainer = CoatFP8Trainer(
+    #     model=fp8_model, tokenizer=tokenizer, args=training_args, coat_args=quantization_args, **data_module
+    # )
 
     if list(pathlib.Path(training_args.output_dir).glob("checkpoint-*")):
         trainer.train(resume_from_checkpoint=True)

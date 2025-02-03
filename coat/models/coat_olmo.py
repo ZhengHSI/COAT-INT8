@@ -55,7 +55,7 @@ from olmo.model import (Activation, BufferCache, Dropout, LayerNorm,
 from olmo.torch_util import ensure_finite_, get_cumulative_document_lengths
 from torch import einsum
 
-from ..real_quantization import (Coat_quantize_bgn, Coat_quantize_end,
+from ..activation.real_quantization import (Coat_quantize_bgn, Coat_quantize_end,
                                  fp8_add_Ifp_Ifp_Ofp_Og16,
                                  fp8_add_Ifp_Ifp_Ofp_Opt, fp8_division,
                                  fp8_division_transpose, fp8_gelu_backward,
@@ -69,8 +69,8 @@ from ..real_quantization import (Coat_quantize_bgn, Coat_quantize_end,
                                  fp8_rmsnorm_backward, fp8_rmsnorm_forward,
                                  fp8_silu_backward, fp8_silu_forward,
                                  fp8_transpose)
-from ._fp8manager import FP8Manager
-from ._fp8_weightcache import FP8CacheWeightModule
+from ..utils._fp8manager import FP8Manager
+from ..utils._fp8_weightcache import FP8CacheWeightModule
 
 if sys.version_info.minor > 8:
     from collections.abc import MutableMapping
@@ -80,19 +80,11 @@ else:
     raise SystemExit("This script supports Python 3.8 or higher")
 
 __all__ = [
-    "LayerNormBase",
-    "LayerNorm",
-    "RMSLayerNorm",
-    "RotaryEmbedding",
-    "Activation",
-    "GELU",
-    "ReLU",
-    "SwiGLU",
-    "OLMoBlock",
-    "OLMoSequentialBlock",
-    "OLMo",
-    "OLMoOutput",
-    "OLMoGenerateOutput",
+    "CoatOLMoBeforeAttentionResidual",
+    "CoatOLMoAfterAttentionResidual",
+    "CoatOLMoMLPResidual",
+    "CoatOLMoBlock",
+    "CoatOLMo",
 ]
 
 
@@ -911,8 +903,6 @@ class CoatOLMoBlock(nn.Module):
     def build(cls, layer_id: int, config: ModelConfig, qargs: QuantActivationConfig, cache: BufferCache) -> OLMoBlock:
         if config.block_type == BlockType.sequential:
             return CoatOLMoSequentialBlock(layer_id, config, qargs, cache)
-        elif config.block_type == BlockType.llama:
-            return CoatOLMoLlamaBlock(layer_id, config, qargs, cache)
         else:
             raise NotImplementedError(f"Unknown block type: '{config.block_type}'")
 
@@ -1084,154 +1074,6 @@ class CoatOLMoSequentialBlock(CoatOLMoBlock):
         # IPython.embed()
 
         return x, qx, sx, cache
-
-
-class CoatOLMoLlamaBlock(OLMoBlock):
-    """
-    This is a transformer block where the output is computed as ``MLP(LN(x + Attention(LN(x))))``
-    (plus another skip connection). This block is similar to `OLMoSequentialBlock`
-    but some operations have slightly different implementations to imitate the
-    behavior of Llama.
-    """
-
-    def __init__(self, layer_id: int, config: ModelConfig, qargs: QuantActivationConfig, cache: BufferCache):
-        super().__init__(layer_id, config, qargs, cache)
-        # Layer norms.
-        self.attn_norm = LayerNorm.build(config)
-        self.ff_norm = LayerNorm.build(config)
-        self.__cache = cache
-
-        # Attention input projection. Projects x -> (q, k, v)
-        if config.multi_query_attention:
-            q_proj_out_dim = config.d_model
-            k_proj_out_dim = config.d_model // config.n_heads
-            v_proj_out_dim = config.d_model // config.n_heads
-        else:
-            q_proj_out_dim = config.d_model
-            k_proj_out_dim = config.d_model
-            v_proj_out_dim = config.d_model
-        self.q_proj = nn.Linear(config.d_model, q_proj_out_dim, bias=config.include_bias, device=config.init_device)
-        self.k_proj = nn.Linear(config.d_model, k_proj_out_dim, bias=config.include_bias, device=config.init_device)
-        self.v_proj = nn.Linear(config.d_model, v_proj_out_dim, bias=config.include_bias, device=config.init_device)
-
-        # Feed-forward input projection.
-        self.ff_proj = nn.Linear(config.d_model, self.hidden_size, bias=config.include_bias, device=config.init_device)
-
-    def reset_parameters(self):
-        super().reset_parameters()
-        self.attn_norm.reset_parameters()
-        self.ff_norm.reset_parameters()
-        # NOTE: the standard deviation for these weights does not depend on the layer.
-
-        if self.config.init_fn == InitFnType.normal:
-            std = self.config.init_std
-            cutoff_factor = self.config.init_cutoff_factor
-        elif self.config.init_fn == InitFnType.mitchell:
-            std = 1 / math.sqrt(self.config.d_model)
-            cutoff_factor = self.config.init_cutoff_factor or 3.0
-        elif self.config.init_fn == InitFnType.full_megatron:
-            std = self.config.init_std
-            cutoff_factor = self.config.init_cutoff_factor or 3.0
-        else:
-            raise NotImplementedError(self.config.init_fn)
-
-        init_normal(self.q_proj, std, cutoff_factor)
-        init_normal(self.k_proj, std, cutoff_factor)
-        init_normal(self.v_proj, std, cutoff_factor)
-        init_normal(self.ff_proj, std, cutoff_factor)
-
-    def _scaled_dot_product_attention(
-        self,
-        q: torch.Tensor,
-        k: torch.Tensor,
-        v: torch.Tensor,
-        attn_mask: torch.Tensor | None = None,
-        dropout_p: float = 0.0,
-        is_causal: bool = False,
-        max_doc_len: int | None = None,
-        cu_doc_lens: torch.Tensor | None = None,
-    ) -> torch.Tensor:
-        if max_doc_len is not None or cu_doc_lens is not None:
-            raise NotImplementedError(f"attention document masking is not implemented for {self.__class__.__name__}")
-
-        attn_weights = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(q.size(-1))
-
-        if is_causal:
-            assert attn_mask is None
-
-            query_len, key_len = q.shape[-2], k.shape[-2]  # could be different if layer_past not None
-            attn_bias = get_causal_attention_bias(self.__cache, key_len, q.device)[:, :, :query_len, :key_len]
-        elif attn_mask is not None:
-            attn_bias = attn_mask.to(q.dtype)
-        else:
-            attn_bias = torch.zeros_like(attn_weights)
-
-        attn_weights += attn_bias
-        attn_weights = nn.functional.softmax(attn_weights, dim=-1).to(q.dtype)
-        attn_weights = nn.functional.dropout(attn_weights, p=dropout_p)
-        return torch.matmul(attn_weights, v)
-
-    def forward(
-        self,
-        x: torch.Tensor,
-        qx: torch.Tensor,
-        sx: torch.Tensor,
-        attention_bias: torch.Tensor | None = None,
-        layer_past: tuple[torch.Tensor, torch.Tensor] | None = None,
-        use_cache: bool = False,
-        max_doc_len: int | None = None,
-        cu_doc_lens: torch.Tensor | None = None,
-    ) -> tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor] | None]:
-        # Get query, key, value projections.
-        # shape:
-        #  - for regular attn q, k, v: (batch_size, seq_len, d_model)
-        #  - for multi-query attn q: (batch_size, seq_len, d_model)
-        #                      k, v: (batch_size, seq_len, d_model // n_heads)
-        x_normed = self.attn_norm(x)
-        q = self.q_proj(x_normed)
-        k = self.k_proj(x_normed)
-        v = self.v_proj(x_normed)
-
-        if self.config.clip_qkv is not None:
-            q.clamp_(min=-self.config.clip_qkv, max=self.config.clip_qkv)
-            k.clamp_(min=-self.config.clip_qkv, max=self.config.clip_qkv)
-            v.clamp_(min=-self.config.clip_qkv, max=self.config.clip_qkv)
-
-        # Get attention scores.
-        att, cache = self.attention(
-            q,
-            k,
-            v,
-            attention_bias,
-            layer_past=layer_past,
-            use_cache=use_cache,
-            max_doc_len=max_doc_len,
-            cu_doc_lens=cu_doc_lens,
-        )
-
-        att = self.attn_out(att)  # NOTE: we move the attn_out outside the self.attention module
-
-        # Add attention scores.
-        # shape: (B, T, C)
-        x = x + self.dropout(att)
-
-        # Add feed-forward projection.
-        # shape: (batch_size, seq_len, d_model)
-        og_x = x
-        if self._activation_checkpoint_fn is not None:
-            x = self._activation_checkpoint_fn(self.ff_norm, x)  # type: ignore
-        else:
-            x = self.ff_norm(x)
-        x = self.ff_proj(x)
-        if self._activation_checkpoint_fn is not None:
-            x = self._activation_checkpoint_fn(self.act, x)  # type: ignore
-        else:
-            x = self.act(x)
-        x = self.ff_out(x)
-        x = self.dropout(x)
-        x = og_x + x
-
-        return x, cache
 
 
 class CoatOLMoBlockGroup(nn.ModuleList):
