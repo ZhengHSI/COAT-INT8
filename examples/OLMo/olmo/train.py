@@ -1268,7 +1268,8 @@ class Trainer:
                         
                         if os.environ.get("SPEED_BENCH", "false") in ["1", "true", "True"]:
                             if get_global_rank() == 0:
-                                print("[SPEED BENCH] We collect the statistics for 10 steps. Please refer to the log above to find the token/s result.")
+                                tps = speed_monitor.check()["throughput/device/tokens_per_second"]
+                                print(f"\n\n Training Speed: {tps} token / s.")
                             exit(0)
                             
                     # Maybe collect other metrics.

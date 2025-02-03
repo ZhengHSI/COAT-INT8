@@ -26,6 +26,8 @@ from torch import Tensor
 from torch.optim.optimizer import Optimizer
 from typing_extensions import ParamSpec, Self, TypeAlias
 
+from ..activation.models._fp8_quantization_config import QuantizationConfig
+
 StateDict: TypeAlias = Dict[str, Any]
 
 convert_str_to_fp8 = {"E4M3": torch.float8_e4m3fn, "E5M2": torch.float8_e5m2}
@@ -34,16 +36,18 @@ convert_str_to_fp8 = {"E4M3": torch.float8_e4m3fn, "E5M2": torch.float8_e5m2}
 class CoatAdamW(Optimizer):
     def __init__(
         self,
-        qargs,
         params,
         lr: float = 1e-3,
         betas: Tuple[float, float] = (0.9, 0.999),
         eps: float = 1e-8,
         weight_decay: float = 1e-2,
         amsgrad: bool = False,
+        qargs: QuantizationConfig = None,
         *,
         fused: Optional[bool] = None,
     ):
+        if qargs is None:
+            qargs = QuantizationConfig()
         self.qargs = qargs
         assert self.qargs.first_order_expansion == self.qargs.second_order_expansion, "We expect the first order and second order momentum to use dynamic range expansion at the same time."
         if not 0.0 <= lr:

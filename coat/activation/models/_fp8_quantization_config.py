@@ -6,7 +6,7 @@ from transformers import PretrainedConfig
 @dataclass
 class QuantizationConfig:
     # Quantize Activation
-    quantize_model: str = "false"
+    quantize_model: str = "true"
     symm: bool = True
     epsilon: float = 1e-10
     fabit: str = "E4M3"
@@ -15,14 +15,13 @@ class QuantizationConfig:
     babit: str = "E5M2"
     bwbit: str = "E5M2"
     bobit: str = "E5M2"
-    qchoice: str = "none"
-    group_size: int = -1
-    pad_to_multiple_of: int = 0
+    group_size: int = 16
+    pad_to_multiple_of: int = 8
     weight_memory_efficient: bool = True
 
     # Quantize Optimizer States
-    first_order_expansion: str = "false"
-    second_order_expansion: str = "false"
+    first_order_expansion: str = "true"
+    second_order_expansion: str = "true"
     first_order_bit: str = "E4M3"
     second_order_bit: str = "E4M3"
     qgroup_size: int = 128
@@ -34,7 +33,7 @@ class QuantizationConfig:
 
     def __init__(
         self,
-        quantize_model: str = "false",
+        quantize_model: str = "true",
         symm: bool = True,
         epsilon: float = 1e-10,
         fabit: str = "E4M3",
@@ -43,12 +42,11 @@ class QuantizationConfig:
         babit: str = "E5M2",
         bwbit: str = "E5M2",
         bobit: str = "E5M2",
-        qchoice: str = "none",
         group_size: int = -1,
         pad_to_multiple_of: int = 0,
         weight_memory_efficient: bool = True,
-        first_order_expansion: bool = False,
-        second_order_expansion: bool = False,
+        first_order_expansion: bool = True,
+        second_order_expansion: bool = True,
         first_order_bit: str = "E4M3",
         second_order_bit: str = "E4M3",
         qgroup_size: int = 128,
@@ -67,7 +65,6 @@ class QuantizationConfig:
         self.babit = babit
         self.bwbit = bwbit
         self.bobit = bobit
-        self.qchoice = qchoice
         self.group_size = group_size
         self.pad_to_multiple_of = pad_to_multiple_of
         self.weight_memory_efficient = weight_memory_efficient

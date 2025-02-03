@@ -70,6 +70,8 @@ if __name__ == "__main__":
     )
     convert_args, quantization_args = parser.parse_args_into_dataclasses()
     
+    print(quantization_args)
+    
     # Call the function with parsed arguments
     download_and_convert_llama(
         convert_args, quantization_args

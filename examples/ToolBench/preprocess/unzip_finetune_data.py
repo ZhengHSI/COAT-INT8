@@ -5,7 +5,7 @@ import os
 zip_files = [
     'data.zip'
 ]
-extract_to = 'data'
+extract_to = './'
 
 # Ensure the destination directory exists
 os.makedirs(extract_to, exist_ok=True)

@@ -652,17 +652,17 @@ try:
     class CoatOLMoAdamW(CoatAdamW, Optimizer):
         def __init__(
             self,
-            qargs,
             params,
             lr: float = 1e-3,
             betas: Tuple[float, float] = (0.9, 0.999),
             eps: float = 1e-8,
             weight_decay: float = 1e-2,
             amsgrad: bool = False,
+            qargs = None,
             *,
             fused: Optional[bool] = None,
         ):
-            CoatAdamW.__init__(self, qargs, params, lr, betas, eps, weight_decay, amsgrad)
+            CoatAdamW.__init__(self, params, lr, betas, eps, weight_decay, amsgrad, qargs=qargs)
         
         step = CoatAdamW.step
 except:
@@ -966,12 +966,12 @@ def build_optimizer(cfg: TrainConfig, model: nn.Module) -> Optimizer:
     elif cfg.optimizer.name == OptimizerType.adamw:
         if cfg.quantize_optimizer.use_quantize_optimizer == OptimizerType.coat_fp8_adamw:
             return CoatOLMoAdamW(
-                cfg.quantize_optimizer,
                 param_groups,
                 lr=cfg.optimizer.learning_rate,
                 betas=cfg.optimizer.betas,
                 weight_decay=cfg.optimizer.weight_decay,
                 eps=cfg.optimizer.eps,
+                qargs=cfg.quantize_optimizer,
             )
         else:
             return AdamW(
