@@ -27,6 +27,12 @@ By leveraging FP8 precision, COAT significantly decreases memory usage by 1.54×
 - [2024/10] [[paper]](https://arxiv.org/abs/2410.19313) is on arxiv!
 
 ## ⚙️ Installation
+
+### pip - from PyPI
+```bash
+pip install fp8-coat
+```
+### from source
 ```bash
 git clone --recurse-submodules https://github.com/NVlabs/COAT.git
 cd COAT
