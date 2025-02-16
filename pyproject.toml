@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "fp8_coat"
-version = "1.0.0"
+version = "1.0.7"
 description = "https://arxiv.org/abs/2410.19313. COAT: Compressing Optimizer states and Activation for Memory-Efficient FP8 Training"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -28,7 +28,10 @@ dependencies = [
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["coat"]
+include = ["coat*"]
+
+[tool.setuptools.package-data]
+"coat.optimizer.kernels" = ["*.cpp", "*.cu"]
 
 [tool.black]
 line-length = 120
