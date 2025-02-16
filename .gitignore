@@ -2,7 +2,7 @@
 *_dev
 8b
 dev/
-dist
+dist/
 config.json
 eval_output/
 eval-result/
