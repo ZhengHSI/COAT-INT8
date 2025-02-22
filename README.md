@@ -206,6 +206,12 @@ cd examples/OLMo/
 mkdir -p datasets/dolma/v1_5
 wget -O datasets/dolma/v1_5/part-000-00000.npy https://olmo-data.org/preprocessed/olmo-mix/v1_5/gpt-neox-20b-pii-special/part-000-00000.npy
 
+# Download the evaluation dateset
+python scripts/download/download_eval.py
+
+# If you want to download more training dataset
+python scripts/download/download_dolma.py
+
 
 # Install the environment.
 cd examples/OLMo/
