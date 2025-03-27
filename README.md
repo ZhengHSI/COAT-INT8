@@ -179,7 +179,7 @@ In this example, we show how to fine-tune a Llama-2 model using COAT on [ToolBen
 ```bash
 cd examples/ToolBench
 # Download the data ToolBench requires
-gdown --id 1XFjDxVZdUY7TXYF2yvzx3pJlS2fy78jk --output data.zip
+git clone https://huggingface.co/datasets/Efficient-Large-Model/COAT-ToolBench
 # Unzip the data
 python preprocess/unzip_finetune_data.py
 ```
