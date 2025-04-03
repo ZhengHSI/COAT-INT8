@@ -31,11 +31,11 @@ convert_fp8_to_embit = {
 }
 
 
-def get_configs_io_block():
+def get_configs_io_block(QB=16):
     configs = []
-    for nstages in [3, 4, 5]:
-        for block_m in [32, 64]:
-            for block_n in [64, 128]:
+    for nstages in [3, 4]:
+        for block_m in [QB, 2 * QB]:
+            for block_n in [QB, QB * 2, 4 * QB]:
                 for nwarps in [4, 8]:
                     configs.append(
                         triton.Config(
@@ -46,6 +46,9 @@ def get_configs_io_block():
                     )
     return configs
 
+def get_tuned_kernel(kernel, QB=16):
+    configs = get_configs_io_block(QB)
+    return triton.autotune(configs=configs, key=["M", "N"])(kernel)
 
 # from .common import SCALE_MIN_THRES, FP8_MAX_VALUE
 #                     SCALE_MIN_THRES: tl.constexpr,

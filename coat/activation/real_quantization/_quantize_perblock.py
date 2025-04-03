@@ -20,45 +20,35 @@ import triton
 import triton.language as tl
 from triton.language.extra.cuda import libdevice
 
-from ._division_transpose import fp8_division_transpose
-from .common import (FP8_MAX_VALUE, SCALE_MIN_THRES, convert_str_to_fp8,
-                     get_configs_io_block)
+from .common import (FP8_MAX_VALUE, SCALE_MIN_THRES, convert_fp8_to_embit,
+                     convert_str_to_fp8, get_configs_io_block)
 
-"""Per Tensor Quantize and Transpose Operator"""
-"""Input uses floating point tensor"""
-"""Output uses per-tensor quantization, returns a non-transpose version and a transpose version"""
+"""Quantize Operator"""
+"""Input uses full precision"""
+"""Output uses 128 * 128 group quantization"""
 """The input can be 2D or 3D, but the calculation is performed in 2D"""
 
 
-@triton.autotune(
-    configs=[] + get_configs_io_block(),
-    key=[
-        "M",
-        "N",
-    ],
-)
-@triton.heuristics(
-    {
-        "BLOCK_SN": lambda args: args["BLOCK_N"] // args["QB"],
-    }
-)
 @triton.jit
-def _fp8_quantize_pertensor_transpose_kernel(
+def _fp8_quantize_perblock_kernel(
+    output_ptr,
     output_scale_ptr,  # output
     input_ptr,  # input
     M,
     N,
+    SM,
     SN,
     QB: tl.constexpr,
     fp8_max,  # shape
     input_stride_0,
     input_stride_1,  # input stride
+    output_stride_0,
+    output_stride_1,  # output stride
     s_output_stride_0,
     s_output_stride_1,  # scale of output stride
     SCALE_MIN_THRES: tl.constexpr,
     BLOCK_M: tl.constexpr,
     BLOCK_N: tl.constexpr,
-    BLOCK_SN: tl.constexpr,
 ):  # CUDA block size
 
     # Block PID
@@ -78,32 +68,43 @@ def _fp8_quantize_pertensor_transpose_kernel(
     )
 
     input = tl.load(input_block_ptr)
-    input = input.to(tl.float32)
-
-    output = tl.reshape(input, (BLOCK_M, BLOCK_SN, QB))
+    output = input.to(tl.float32)
 
     # Quantize Scale calculation
     abs_output = tl.abs(output)
-    max_val = tl.max(abs_output, axis=2) + SCALE_MIN_THRES
+    max_val = tl.max(abs_output) + SCALE_MIN_THRES
     scale_output = max_val / fp8_max
-    scale_output = tl.reshape(scale_output, (BLOCK_M, BLOCK_SN, 1))
+
+    # Quantize
+    output = tl.fdiv(output, scale_output)
+
+    output = output.to(output_ptr.type.element_ty)
 
     scale_output = scale_output.to(output_scale_ptr.type.element_ty)
-    scale_output = tl.reshape(scale_output, (BLOCK_M, BLOCK_SN))
 
+    # pointers
+    output_block_ptr = tl.make_block_ptr(
+        base=output_ptr,
+        shape=(M, N),
+        strides=(output_stride_0, output_stride_1),
+        offsets=(pid_dim0 * BLOCK_M, pid_dim1 * BLOCK_N),
+        block_shape=(BLOCK_M, BLOCK_N),
+        order=(1, 0),
+    )
     scale_output_ptr = tl.make_block_ptr(
         base=output_scale_ptr,
-        shape=(M, SN),
+        shape=(SM, SN),
         strides=(s_output_stride_0, s_output_stride_1),
-        offsets=(pid_dim0 * BLOCK_M, pid_dim1 * BLOCK_SN),
-        block_shape=(BLOCK_M, BLOCK_SN),
+        offsets=(pid_dim0, pid_dim1),
+        block_shape=(1, 1),
         order=(1, 0),
     )
 
+    tl.store(output_block_ptr, output)
     tl.store(scale_output_ptr, scale_output)
 
 
-def fp8_quantize_pertensor_transpose(x, QB, fp8type, transpose_output_2d=False, stochastic=False, scale_dtype=torch.bfloat16):
+def fp8_quantize_perblock(x, QB, fp8type, scale_dtype=torch.bfloat16):
     # Change batched 3D input to 2D
     batched = False
     if len(x.shape) == 3:
@@ -113,38 +114,37 @@ def fp8_quantize_pertensor_transpose(x, QB, fp8type, transpose_output_2d=False, 
 
     # defining the input and output tensor
     M, N = x.shape
-    SN = N // QB
+    SM, SN = M // QB, N // QB
 
-    fp8type = convert_str_to_fp8[fp8type]
-    s_y = torch.empty((M, SN), dtype=scale_dtype, device=x.device)
+    if isinstance(fp8type, str):
+        fp8type = convert_str_to_fp8[fp8type]
+    y = torch.empty_like(x, dtype=fp8type)
+    s_y = torch.empty((SM, SN), dtype=scale_dtype, device=x.device)
     fp8MaxValue = FP8_MAX_VALUE[fp8type]  # E4M3 and E5M2 have different max value
 
     grid = lambda META: (triton.cdiv(M, META["BLOCK_M"]) * triton.cdiv(N, META["BLOCK_N"]),)
 
-    _fp8_quantize_pertensor_transpose_kernel[grid](
+    _fp8_quantize_perblock_kernel[grid](
+        y,
         s_y,
         x,
         M,
         N,
+        SM,
         SN,
         QB,
         fp8MaxValue,
         x.stride(0),
         x.stride(1),
+        y.stride(0),
+        y.stride(1),
         s_y.stride(0),
         s_y.stride(1),
         SCALE_MIN_THRES=SCALE_MIN_THRES,
+        BLOCK_M=QB,
+        BLOCK_N=QB
     )
 
-    s_y_max = s_y.max()
-    qy, s_y_max, qy_t = fp8_division_transpose(
-        x, QB, fp8type, s_y_max, stochastic=stochastic
-    )  # Stochastic Rounding happens here
+    # Do not recover to 3D
 
-    # Recover 2D to 3D
-    if batched:
-        qy = qy.reshape(BS, -1, qy.shape[-1])
-        if not transpose_output_2d:
-            qy_t = qy_t.reshape(BS, -1, qy_t.shape[-1])
-
-    return qy, s_y_max, qy_t  # y_t is expected to be 2D tensor
+    return y, s_y

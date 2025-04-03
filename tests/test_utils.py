@@ -42,23 +42,41 @@ def random_tensor_generator(BS, SL, CDIM, QB, fp8type):
     return rqx, qx, sx
 
 
-def quantize_tensor(x, BS, SL, CDIM, QB, fp8type, per_tensor=False):
+def quantize_tensor(x, BS, SL, CDIM, QB, fp8type, quant_type="per_group"):
     """
     Quantizes a given tensor using a per-group quantization strategy, converting it into fp8 format.
     """
-    if per_tensor:
+    if quant_type == "per_tensor":
         sx = (x.abs().max() / FP8_MAX_VALUE[fp8type]).to(torch.bfloat16)
         qx = (x / sx).to(fp8type)
         rqx = qx.to(torch.float32) * sx.to(torch.float32)
-    else:
+    elif quant_type == "per_block":
+        _qx = x.reshape(BS * SL // QB, QB, CDIM // QB, QB)
+        _qx = _qx.permute(0, 2, 1, 3)
+        sx = _qx.abs().amax(dim=(2,3)) / FP8_MAX_VALUE[fp8type]
+        sx = sx.to(torch.bfloat16)
+        _qx = (_qx / sx.unsqueeze(2).unsqueeze(3)).to(fp8type)
+        qx = _qx.permute(0, 2, 1, 3).reshape(BS * SL, CDIM)
+        rqx = (_qx.float() * sx.unsqueeze(2).unsqueeze(3).float()).permute(0, 2, 1, 3).reshape(BS * SL, CDIM)
+    elif quant_type == "per_group":
         _qx = x.reshape(BS, SL, CDIM // QB, QB)
         sx = _qx.abs().amax(dim=(3)) / FP8_MAX_VALUE[fp8type]
         sx = sx.to(torch.bfloat16)
         _qx = (_qx / sx.unsqueeze(3)).to(fp8type)
         qx = _qx.reshape(BS, SL, CDIM)
         rqx = (_qx.float() * sx.unsqueeze(3).float()).reshape(BS, SL, CDIM)
+    else:
+        raise ValueError(f"Invalid quantization type {quant_type}. ")
     return rqx, qx, sx
 
+def quantize_perblock(x, BS, SL, CDIM, QB, fp8type):
+    """
+    Quantizes a given tensor using a per-block quantization strategy, converting it into fp8 format.
+    """
+    sx = (x.abs().max() / FP8_MAX_VALUE[fp8type]).to(torch.bfloat16)
+    qx = (x / sx).to(fp8type)
+    rqx = qx.to(torch.float32) * sx.to(torch.float32)
+    return rqx, qx, sx
 
 def dequantize_tensor(x_triton, s_triton, BS, SL, CDIM, QB):
     """

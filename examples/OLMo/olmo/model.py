@@ -445,7 +445,7 @@ class OLMoBlock(nn.Module):
         assert (self.act.output_multiplier * self.hidden_size) % 1 == 0
 
         # Attention output projection.
-        if os.environ.get("COAT_FP8Linear", "false") == "true":
+        if os.environ.get("COAT_FP8Linear", "false") == "PerTensor":
             from coat.activation.real_quantization.fp8linear import FP8Linear
             self.attn_out = FP8Linear(
                 config.d_model, config.d_model, bias=config.include_bias, device=config.init_device, layer_idx=layer_id
@@ -458,6 +458,19 @@ class OLMoBlock(nn.Module):
                 bias=config.include_bias,
                 device=config.init_device,
                 layer_idx=layer_id
+            )
+        elif os.environ.get("COAT_FP8Linear", "false") == "DeepSeek":
+            from coat.activation.deepseek.fp8linear import FP8DeepSeekLinear
+            self.attn_out = FP8DeepSeekLinear(
+                config.d_model, config.d_model, bias=config.include_bias, device=config.init_device
+            )
+
+            # Feed-forward output projection.
+            self.ff_out = FP8DeepSeekLinear(
+                int(self.act.output_multiplier * self.hidden_size),
+                config.d_model,
+                bias=config.include_bias,
+                device=config.init_device
             )
         else:
             self.attn_out = nn.Linear(
@@ -701,13 +714,22 @@ class OLMoSequentialBlock(OLMoBlock):
             config.effective_n_kv_heads * head_dim,
             config.effective_n_kv_heads * head_dim,
         )
-        if os.environ.get("COAT_FP8Linear", "false") == "true":
+        if os.environ.get("COAT_FP8Linear", "false") == "PerTensor":
             from coat.activation.real_quantization.fp8linear import FP8Linear
             self.att_proj = FP8Linear(
                 config.d_model, sum(self.fused_dims), bias=config.include_bias, device=config.init_device, layer_idx=layer_id
             )
             # Feed-forward input projection.
             self.ff_proj = FP8Linear(
+                config.d_model, self.hidden_size, bias=config.include_bias, device=config.init_device, layer_idx=layer_id
+            )
+        elif os.environ.get("COAT_FP8Linear", "false") == "DeepSeek":
+            from coat.activation.deepseek.fp8linear import FP8DeepSeekLinear
+            self.att_proj = FP8DeepSeekLinear(
+                config.d_model, sum(self.fused_dims), bias=config.include_bias, device=config.init_device, layer_idx=layer_id
+            )
+            # Feed-forward input projection.
+            self.ff_proj = FP8DeepSeekLinear(
                 config.d_model, self.hidden_size, bias=config.include_bias, device=config.init_device, layer_idx=layer_id
             )
         else:

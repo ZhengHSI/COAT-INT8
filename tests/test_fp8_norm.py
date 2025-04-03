@@ -42,7 +42,7 @@ def _test_layer_norm_noparam(x, qx, sx, g, BS, SL, CDIM, QB, eps=1e-5):
     w_shape = (CDIM,)
     torch_layer_norm = torch.nn.functional.layer_norm
     _output_torch = torch_layer_norm(x, w_shape, eps=eps)
-    output_torch_fwd, _, _ = quantize_tensor(_output_torch, BS, SL, CDIM, QB, qx.dtype, per_tensor=True)
+    output_torch_fwd, _, _ = quantize_tensor(_output_torch, BS, SL, CDIM, QB, qx.dtype, quant_type="per_block")
 
     x_triton, s_triton, x_t_triton, (mean, rstd, num_warps) = fp8_layernorm_noparam_forward(qx, sx, QB, eps)
     output_triton_fwd = dequantize_tensor(x_triton, s_triton, BS, SL, CDIM, QB)
@@ -68,7 +68,7 @@ def _test_layer_norm_param(x, qx, sx, g, w, b, BS, SL, CDIM, QB, eps=1e-5):
     w_shape = (CDIM,)
     torch_layer_norm = torch.nn.functional.layer_norm
     _output_torch = torch_layer_norm(x, w_shape, weight=w, bias=b, eps=eps)
-    output_torch_fwd, _, _ = quantize_tensor(_output_torch, BS, SL, CDIM, QB, qx.dtype, per_tensor=True)
+    output_torch_fwd, _, _ = quantize_tensor(_output_torch, BS, SL, CDIM, QB, qx.dtype, quant_type="per_block")
 
     x_triton, s_triton, x_t_triton, (_, _, mean, rstd, num_warps) = fp8_layernorm_param_forward(qx, sx, w, b, QB, eps)
     output_triton_fwd = dequantize_tensor(x_triton, s_triton, BS, SL, CDIM, QB)
@@ -101,7 +101,7 @@ def _test_rms_norm(x, qx, sx, g, w, BS, SL, CDIM, QB, eps=1e-5):
     w_shape = (CDIM,)
     torch_rms_norm = torch.nn.functional.rms_norm
     _output_torch = torch_rms_norm(x, w_shape, w, eps=eps)
-    output_torch_fwd, _, _ = quantize_tensor(_output_torch, BS, SL, CDIM, QB, qx.dtype, per_tensor=True)
+    output_torch_fwd, _, _ = quantize_tensor(_output_torch, BS, SL, CDIM, QB, qx.dtype, quant_type="per_block")
 
     x_triton, s_triton, x_t_triton, (_, rstd, num_warps) = fp8_rmsnorm_forward(qx, sx, w, QB, eps)
     output_triton_fwd = dequantize_tensor(x_triton, s_triton, BS, SL, CDIM, QB)
