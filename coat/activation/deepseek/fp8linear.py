@@ -30,8 +30,10 @@ from ..real_quantization._quantize import fp8_quantize
 from ..real_quantization._quantize_transpose import fp8_quantize_transpose
 from ..real_quantization._quantize_perblock import fp8_quantize_perblock
 from ..real_quantization._quantize_perblock_transpose import fp8_quantize_perblock_transpose
+from ..real_quantization._quantize_perblock_transpose_pergroup import fp8_quantize_perblock_transpose_pergroup
 from .linear import fp8_deepseek_linear_backward, fp8_deepseek_linear_forward
 
+import deep_gemm
 
 @dataclass
 class DefaultArgs:
@@ -72,13 +74,13 @@ class _FP8DeepSeekLinear(Function):
         Iscale = Iscale.t().contiguous().t()
         ITscale = ITscale.t().contiguous().t()
 
-        (Qweight, Wscale), (Qweight_t, WTscale) = fp8_quantize_perblock_transpose(weight, 128, args.fwbit, scale_dtype=torch.float32)
+        (Qweight, Wscale) = fp8_quantize_perblock(weight, 128, args.fwbit, scale_dtype=torch.float32)
 
-        ctx.save_for_backward(Qinput_t, ITscale, Qweight_t, WTscale, bias)
+        ctx.save_for_backward(Qinput_t, ITscale, weight, bias)
         ctx.utils = args, layer_name, input.shape, weight.shape
-
-        fc_output = fp8_deepseek_linear_forward(Qinput, Iscale, Qweight, Wscale, 0, bias)
         
+        fc_output = fp8_deepseek_linear_forward(Qinput, Iscale, Qweight, Wscale, 0, bias)
+
         output_shape = list(input.shape)
         output_shape[-1] = weight.shape[0]
         
@@ -89,7 +91,7 @@ class _FP8DeepSeekLinear(Function):
     @staticmethod
     @torch.amp.custom_bwd(device_type="cuda")
     def backward(ctx, grad_output):
-        Qinput_t, ITscale, Qweight_t, WTscale, bias = ctx.saved_tensors
+        Qinput_t, ITscale, weight, bias = ctx.saved_tensors
         args, layer_name, input_shape, weight_shape = ctx.utils
         grad_output_shape = grad_output.shape
         
@@ -97,21 +99,25 @@ class _FP8DeepSeekLinear(Function):
         grad_output = grad_output.view(-1, grad_output.shape[-1])
         
         # For DGrad
-        Qgrad_output, Gscale = fp8_quantize(grad_output, 128, args.bobit, scale_dtype=torch.float32)
-        Gscale = Gscale.t().contiguous().t()
+        (Qgrad_output_pb, Gscale_pb), (Qgrad_output_t, Gscale_t), (Qgrad_output_pg, Gscale_pg) = \
+            fp8_quantize_perblock_transpose_pergroup(grad_output, 128, args.bobit, scale_dtype=torch.float32, only_transposed=True)
+        # Qgrad_output, Gscale = fp8_quantize(grad_output, 128, args.bobit, scale_dtype=torch.float32)
+        Gscale_pg = Gscale_pg.t().contiguous().t()
+        
+        Qweight_t, Wscale_t = fp8_quantize_perblock_transpose(weight, 128, args.fwbit, scale_dtype=torch.float32, only_transposed=True)
 
         # For WGrad
-        Qgrad_output_t, GTscale = fp8_quantize_perblock_transpose(grad_output, 128, args.bobit, scale_dtype=torch.float32, only_transposed=True)
-
+        # Qgrad_output_t, GTscale = fp8_quantize_perblock_transpose(grad_output, 128, args.bobit, scale_dtype=torch.float32, only_transposed=True)
+        
         grad_input, grad_weight = fp8_deepseek_linear_backward(
             Qinput_t,
             ITscale,
-            Qgrad_output,
-            Gscale,
+            Qgrad_output_pg,
+            Gscale_pg,
             Qgrad_output_t,
-            GTscale,
+            Gscale_t,
             Qweight_t,
-            WTscale,
+            Wscale_t,
             16,
         )
 

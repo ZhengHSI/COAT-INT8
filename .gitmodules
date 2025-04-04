@@ -4,3 +4,6 @@
 [submodule "examples/ToolBench"]
 	path = examples/ToolBench
 	url = https://github.com/xijiu9/ToolBench
+[submodule "third_party/DeepGEMM"]
+	path = third_party/DeepGEMM
+	url = https://github.com/deepseek-ai/DeepGEMM.git

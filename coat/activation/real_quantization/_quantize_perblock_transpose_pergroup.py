@@ -30,10 +30,12 @@ from .common import (FP8_MAX_VALUE, SCALE_MIN_THRES, convert_fp8_to_embit,
 
 
 @triton.jit
-def _fp8_quantize_perblock_kernel(
+def _fp8_quantize_perblock_transpose_pergroup_kernel(
     output_ptr,
+    output_t_ptr,
     output_pg_ptr,
     output_scale_ptr,  # output
+    output_scale_t_ptr,  # output
     output_scale_pg_ptr,  # output
     input_ptr,  # input
     M,
@@ -46,13 +48,18 @@ def _fp8_quantize_perblock_kernel(
     input_stride_1,  # input stride
     output_stride_0,
     output_stride_1,  # output stride
+    output_t_stride_0,
+    output_t_stride_1,  # output stride
     output_pg_stride_0,
     output_pg_stride_1,  # output stride
     s_output_stride_0,
     s_output_stride_1,  # scale of output stride
+    s_output_t_stride_0,
+    s_output_t_stride_1,  # scale of output stride
     s_output_pg_stride_0,
     s_output_pg_stride_1,  # scale of output stride
     SCALE_MIN_THRES: tl.constexpr,
+    ONLY_TRANSPOSED: tl.constexpr,
     BLOCK_M: tl.constexpr,
     BLOCK_N: tl.constexpr,
 ):  # CUDA block size
@@ -87,8 +94,10 @@ def _fp8_quantize_perblock_kernel(
     output = tl.fdiv(output, scale_output)
 
     output = output.to(output_ptr.type.element_ty)
-
+    output_t = tl.trans(output)
+    
     scale_output = scale_output.to(output_scale_ptr.type.element_ty)
+    scale_output_t = scale_output
 
     # pointers
     output_block_ptr = tl.make_block_ptr(
@@ -99,6 +108,14 @@ def _fp8_quantize_perblock_kernel(
         block_shape=(BLOCK_M, BLOCK_N),
         order=(1, 0),
     )
+    output_t_block_ptr = tl.make_block_ptr(
+        base=output_t_ptr,
+        shape=(N, M),
+        strides=(output_t_stride_0, output_t_stride_1),
+        offsets=(pid_dim1 * BLOCK_N, pid_dim0 * BLOCK_M),
+        block_shape=(BLOCK_N, BLOCK_M),
+        order=(1, 0),
+    )
     scale_output_ptr = tl.make_block_ptr(
         base=output_scale_ptr,
         shape=(SM, SN),
@@ -107,9 +124,21 @@ def _fp8_quantize_perblock_kernel(
         block_shape=(1, 1),
         order=(1, 0),
     )
+    scale_output_t_ptr = tl.make_block_ptr(
+        base=output_scale_t_ptr,
+        shape=(SN, SM),
+        strides=(s_output_t_stride_0, s_output_t_stride_1),
+        offsets=(pid_dim1, pid_dim0),
+        block_shape=(1, 1),
+        order=(1, 0),
+    )
 
-    tl.store(output_block_ptr, output)
-    tl.store(scale_output_ptr, scale_output)
+    if not ONLY_TRANSPOSED:
+        tl.store(output_block_ptr, output)
+        tl.store(scale_output_ptr, scale_output)
+        
+    tl.store(output_t_block_ptr, output_t)
+    tl.store(scale_output_t_ptr, scale_output_t)
     
     # ========== End Per Block Quantization
     
@@ -126,9 +155,9 @@ def _fp8_quantize_perblock_kernel(
     # Quantize
     output = tl.fdiv(output, scale_output)
 
-    output = output.to(output_ptr.type.element_ty)
+    output = output.to(output_pg_ptr.type.element_ty)
 
-    scale_output = scale_output.to(output_scale_ptr.type.element_ty)
+    scale_output = scale_output.to(output_scale_pg_ptr.type.element_ty)
     scale_output = tl.reshape(scale_output, (BLOCK_M, 1))
 
     # pointers
@@ -141,7 +170,7 @@ def _fp8_quantize_perblock_kernel(
         order=(1, 0),
     )
     scale_output_pg_ptr = tl.make_block_ptr(
-        base=output_scale_ptr,
+        base=output_scale_pg_ptr,
         shape=(M, SN),
         strides=(s_output_pg_stride_0, s_output_pg_stride_1),
         offsets=(pid_dim0 * BLOCK_M, pid_dim1),
@@ -154,7 +183,7 @@ def _fp8_quantize_perblock_kernel(
 
     # ========== End Per Group Quantization
 
-def fp8_quantize_perblock(x, QB, fp8type, scale_dtype=torch.bfloat16):
+def fp8_quantize_perblock_transpose_pergroup(x, QB, fp8type, scale_dtype=torch.bfloat16, only_transposed=False):
     # Change batched 3D input to 2D
     batched = False
     if len(x.shape) == 3:
@@ -169,17 +198,21 @@ def fp8_quantize_perblock(x, QB, fp8type, scale_dtype=torch.bfloat16):
     if isinstance(fp8type, str):
         fp8type = convert_str_to_fp8[fp8type]
     y = torch.empty_like(x, dtype=fp8type)
+    y_t = torch.empty((N, M), dtype=fp8type, device=x.device)
     y_pg = torch.empty_like(x, dtype=fp8type)
     s_y = torch.empty((SM, SN), dtype=scale_dtype, device=x.device)
+    s_y_t = torch.empty((SN, SM), dtype=scale_dtype, device=x.device)
     s_y_pg = torch.empty((M, SN), dtype=scale_dtype, device=x.device)
     fp8MaxValue = FP8_MAX_VALUE[fp8type]  # E4M3 and E5M2 have different max value
 
     grid = lambda META: (triton.cdiv(M, META["BLOCK_M"]) * triton.cdiv(N, META["BLOCK_N"]),)
 
-    _fp8_quantize_perblock_kernel[grid](
+    _fp8_quantize_perblock_transpose_pergroup_kernel[grid](
         y,
+        y_t,
         y_pg,
         s_y,
+        s_y_t,
         s_y_pg,
         x,
         M,
@@ -192,17 +225,22 @@ def fp8_quantize_perblock(x, QB, fp8type, scale_dtype=torch.bfloat16):
         x.stride(1),
         y.stride(0),
         y.stride(1),
+        y_t.stride(0),
+        y_t.stride(1),
         y_pg.stride(0),
         y_pg.stride(1),
         s_y.stride(0),
         s_y.stride(1),
+        s_y_t.stride(0),
+        s_y_t.stride(1),
         s_y_pg.stride(0),
         s_y_pg.stride(1),
         SCALE_MIN_THRES=SCALE_MIN_THRES,
+        ONLY_TRANSPOSED=only_transposed,
         BLOCK_M=QB,
         BLOCK_N=QB
     )
 
     # Do not recover to 3D
 
-    return (y, s_y), (y_pg, s_y_pg)
+    return (y, s_y), (y_t, s_y_t), (y_pg, s_y_pg)

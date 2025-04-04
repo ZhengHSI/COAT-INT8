@@ -18,7 +18,7 @@ pip install --upgrade pip setuptools
 
 # install coat
 pip install -e .
-pip install flash-attn==2.6.3 --no-build-isolation
+pip install -U flash-attn --no-build-isolation
 
 # install fp8 optimizer
 cd coat/optimizer/kernels/
