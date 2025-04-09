@@ -3,7 +3,7 @@ import os
 
 # Define paths for each zip file and their extraction directory
 zip_files = [
-    'data.zip'
+    'COAT-ToolBench/data.zip'
 ]
 extract_to = './'
 

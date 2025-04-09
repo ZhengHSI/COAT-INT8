@@ -19,7 +19,7 @@ import math
 import torch
 
 
-def floatExMy_quantize_torch(x, e_bit, m_bit, stochastic):
+def floatExMy_quantize_torch(x, e_bit, m_bit, stochastic, ceil = False):
     sign, x_abs = x.sign(), x.abs()
     Elow, Ehigh, Mhigh = -(2 ** (e_bit - 1)) + 2, 2 ** (e_bit - 1), 2**m_bit
     expo = torch.floor(torch.log2(x_abs))
@@ -32,7 +32,11 @@ def floatExMy_quantize_torch(x, e_bit, m_bit, stochastic):
     if stochastic:
         noise = mant_frac.new(mant_frac.shape).uniform_(-0.5, 0.5)
         mant_frac.add_(noise)
-    mant_frac = torch.round(mant_frac)
+        
+    if ceil:
+        mant_frac = torch.ceil(mant_frac)
+    else:
+        mant_frac = torch.round(mant_frac)
 
     mant_q = mant_int + mant_frac / Mhigh
     y = sign * (2**expo) * mant_q
@@ -41,7 +45,7 @@ def floatExMy_quantize_torch(x, e_bit, m_bit, stochastic):
     return y
 
 
-def floatExM0_quantize_torch(x, e_bit, stochastic):
+def floatExM0_quantize_torch(x, e_bit, stochastic, ceil = False):
     sign, x_abs = x.sign(), x.abs()
     Elow, Ehigh = -(2 ** (e_bit - 1)) + 1, 2 ** (e_bit - 1)
     expo = torch.log2(x_abs)
@@ -51,7 +55,11 @@ def floatExM0_quantize_torch(x, e_bit, stochastic):
         log_bias = math.log2(4 / 3) - 1 / 2
         expo.add(torch.ones_like(expo) * log_bias)
     expo = torch.clamp(expo, min=Elow - 1, max=Ehigh)
-    expo = torch.round(expo)
+    
+    if ceil:
+        expo = torch.ceil(expo)
+    else:
+        expo = torch.round(expo)
 
     y = sign * (2**expo) * (expo > Elow)  # When underflow, set the value to 0
     y = y.to(x)

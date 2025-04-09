@@ -67,7 +67,7 @@ class FP8DeepSeekLinear(nn.Linear):
 
 class _FP8DeepSeekLinear(Function):
     @staticmethod
-    @torch.amp.custom_fwd(device_type="cuda", cast_inputs=torch.bfloat16)
+    @torch.amp.custom_fwd(device_type="cuda")
     def forward(ctx, input, weight, bias, args, layer_name):
         (Qinput, Iscale), (Qinput_t, ITscale) = fp8_quantize_transpose(input, 128, args.fabit, scale_dtype=torch.float32)
         # To match deepseek's kernel requirement
@@ -97,18 +97,15 @@ class _FP8DeepSeekLinear(Function):
         
         # Flatten the gradient
         grad_output = grad_output.view(-1, grad_output.shape[-1])
-        
+
         # For DGrad
         (Qgrad_output_pb, Gscale_pb), (Qgrad_output_t, Gscale_t), (Qgrad_output_pg, Gscale_pg) = \
             fp8_quantize_perblock_transpose_pergroup(grad_output, 128, args.bobit, scale_dtype=torch.float32, only_transposed=True)
-        # Qgrad_output, Gscale = fp8_quantize(grad_output, 128, args.bobit, scale_dtype=torch.float32)
+
         Gscale_pg = Gscale_pg.t().contiguous().t()
-        
+
         Qweight_t, Wscale_t = fp8_quantize_perblock_transpose(weight, 128, args.fwbit, scale_dtype=torch.float32, only_transposed=True)
 
-        # For WGrad
-        # Qgrad_output_t, GTscale = fp8_quantize_perblock_transpose(grad_output, 128, args.bobit, scale_dtype=torch.float32, only_transposed=True)
-        
         grad_input, grad_weight = fp8_deepseek_linear_backward(
             Qinput_t,
             ITscale,
@@ -118,7 +115,6 @@ class _FP8DeepSeekLinear(Function):
             Gscale_t,
             Qweight_t,
             Wscale_t,
-            16,
         )
 
         if bias is not None:

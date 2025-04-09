@@ -16,7 +16,7 @@ def fp8_deepseek_linear_forward(x, s, w, s_w, QB, bias=None):
     return out
 
 def fp8_deepseek_linear_backward(
-    x_t, s_t, g, s_g, g_t, s_g_t, w_t, s_w_t, QB
+    x_t, s_t, g, s_g, g_t, s_g_t, w_t, s_w_t
 ):
     # Dgrad
     g_fp8, w_t_fp8 = (g, s_g), (w_t, s_w_t)
@@ -33,5 +33,5 @@ def fp8_deepseek_linear_backward(
     deep_gemm.gemm_fp8_fp8_bf16_nt(x_t_fp8, g_t_fp8, w_g_t)
 
     # We need to tranpose the gradient to match the size
-    return y, w_g_t.t()
+    return y, w_g_t.t().contiguous()
     

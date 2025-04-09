@@ -25,32 +25,24 @@ from .test_utils import check_similarity, dequantize_tensor, quantize_tensor
 
 
 def _test_linear_mse(input, weight, gradient, m, n, k, device):
-    quantiles = [0.5, 0.2, 0.8]
-    
     with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
         # Forward without Quantization
         bf16_input = input.clone().requires_grad_(True)
         bf16_linear = torch.nn.Linear(k, n, bias=False).to(torch.bfloat16)
         bf16_linear.weight.data = weight
         output_bf16_fwd = bf16_linear(bf16_input)
-        
-        output_bf16_fwd_time, _, _ = triton.testing.do_bench(lambda: bf16_linear(bf16_input), quantiles=quantiles, rep=100)
 
         # Forward + Quantization
         bf16_input_quant = input.clone().requires_grad_(True)
         bf16_linear_quant = FP8Linear(k, n, bias=False, device=device).to(torch.bfloat16)
         bf16_linear_quant.weight.data = weight
         output_bf16_quant_fwd = bf16_linear_quant(bf16_input_quant)
-        
-        output_bf16_quant_fwd_time, _, _ = triton.testing.do_bench(lambda: bf16_linear_quant(bf16_input_quant), quantiles=quantiles, rep=100)
-        
+
         # Forward + DeepSeek FP8
         fp8_input = input.clone().requires_grad_(True)
         fp8_linear = FP8DeepSeekLinear(k, n, bias=False, device=device).to(torch.bfloat16)
         fp8_linear.weight.data = weight
         output_fp8_fwd = fp8_linear(fp8_input)
-        
-        output_fp8_fwd_time, _, _ = triton.testing.do_bench(lambda: fp8_linear(fp8_input), quantiles=quantiles, rep=100)
 
         # Backward
         output_bf16_fwd.backward(gradient, retain_graph=True)
@@ -64,17 +56,10 @@ def _test_linear_mse(input, weight, gradient, m, n, k, device):
         grad_input_fp8_bwd = fp8_input.grad.clone()
         grad_weight_fp8_bwd = fp8_linear.weight.grad.clone()
 
-        output_bf16_bwd_time, _, _ = triton.testing.do_bench(lambda: output_bf16_fwd.backward(gradient, retain_graph=True), grad_to_none=[bf16_input], quantiles=quantiles, rep=100)
-        output_bf16_quant_bwd_time, _, _ = triton.testing.do_bench(lambda: output_bf16_quant_fwd.backward(gradient, retain_graph=True), grad_to_none=[bf16_input_quant], quantiles=quantiles, rep=100)
-        output_fp8_bwd_time, _, _ = triton.testing.do_bench(lambda: output_fp8_fwd.backward(gradient, retain_graph=True), grad_to_none=[fp8_input], quantiles=quantiles, rep=100)
-
     return (
         output_bf16_fwd, output_bf16_quant_fwd, output_fp8_fwd, 
         grad_input_bf16_bwd, grad_input_bf16_quant_bwd, grad_input_fp8_bwd, 
         grad_weight_bf16_bwd, grad_weight_bf16_quant_bwd, grad_weight_fp8_bwd
-    ), (
-        output_bf16_fwd_time, output_bf16_quant_fwd_time, output_fp8_fwd_time,
-        output_bf16_bwd_time, output_bf16_quant_bwd_time, output_fp8_bwd_time
     )
     
 def _test_deepseek_linear(input, weight, gradient, m, n, k, device):
@@ -164,7 +149,7 @@ class TestLinear(unittest.TestCase):
         output_bf16_fwd, output_fp8_deepseek_fwd, grad_input_bf16_bwd, grad_input_fp8_deepseek_bwd, grad_weight_bf16_bwd, grad_weight_fp8_deepseek_bwd = _test_deepseek_linear(a, b, g, M, N, K, device)
         
     def test_linear_mse(self):
-        M, N, K = 16384, 16384, 4096
+        M, N, K = 16384, 16384, 16384
         device, QB = "cuda", 128
         
         a = torch.randn((M, K), device=device, dtype=torch.bfloat16)
@@ -175,9 +160,6 @@ class TestLinear(unittest.TestCase):
             output_bf16_fwd, output_bf16_quant_fwd, output_fp8_fwd, \
             grad_input_bf16_bwd, grad_input_bf16_quant_bwd, grad_input_fp8_bwd, \
             grad_weight_bf16_bwd, grad_weight_bf16_quant_bwd, grad_weight_fp8_bwd
-        ), (
-            output_bf16_fwd_time, output_bf16_quant_fwd_time, output_fp8_fwd_time,
-            output_bf16_bwd_time, output_bf16_quant_bwd_time, output_fp8_bwd_time
         ) = _test_linear_mse(a, b, g, M, N, K, device)
 
         # Calculate MSE
@@ -195,23 +177,7 @@ class TestLinear(unittest.TestCase):
         print(f"MSE Grad Input FP8: {mse_grad_input_fp8}")
         print(f"MSE Grad Weight Quant: {mse_grad_weight_quant}")
         print(f"MSE Grad Weight FP8: {mse_grad_weight_fp8}")
-        
-        # Print Time
-        print(f"Time Input Forward BF16: {output_bf16_fwd_time}")
-        print(f"Time Input Forward Quant: {output_bf16_quant_fwd_time}")
-        print(f"Time Input Forward FP8: {output_fp8_fwd_time}")
-        print(f"Time Input Backward BF16: {output_bf16_bwd_time}")
-        print(f"Time Input Backward Quant: {output_bf16_quant_bwd_time}")
-        print(f"Time Input Backward FP8: {output_fp8_bwd_time}")
-        
-        
-        # check_similarity(output_bf16_fwd, output_fp8_fwd, 1e-1, 0.2)
-        # check_similarity(output_bf16_fwd, output_bf16_quant_fwd, 1e-1, 0.5)
-        # check_similarity(grad_input_bf16_bwd, grad_input_fp8_bwd, 1e-1, 0.2)
-        # check_similarity(grad_input_bf16_bwd, grad_input_bf16_quant_bwd, 1e-1, 0.5)
-        # check_similarity(grad_weight_bf16_bwd, grad_weight_fp8_bwd, 1e-1, 0.2)
-        # check_similarity(grad_weight_bf16_bwd, grad_weight_bf16_quant_bwd, 1e-1, 0.5)
-        
+
         
 if __name__ == "__main__":
     torch.manual_seed(0)
