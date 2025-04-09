@@ -49,7 +49,7 @@ def _test_gelu_fwd(x, qx, sx, BS, SL, CDIM, QB):
     """
     torch_gelu = torch.nn.GELU()
     output_torch = torch_gelu(x)
-    output_torch, _, _ = quantize_tensor(output_torch, BS, SL, CDIM, QB, qx.dtype, per_tensor=True)
+    output_torch, _, _ = quantize_tensor(output_torch, BS, SL, CDIM, QB, qx.dtype, quant_type="per_block")
 
     x_triton, s_triton, x_t_triton = fp8_gelu_forward(qx, sx, QB)
     output_triton = dequantize_tensor(x_triton, s_triton, BS, SL, CDIM, QB)
@@ -68,7 +68,7 @@ def _test_gelu_bwd(x, qx, sx, g, BS, SL, CDIM, QB, fp8type):
     output_torch = torch_gelu(x)
     output_torch.backward(g)
     grad_torch, _, __ = quantize_tensor(
-        x.grad, BS, SL, CDIM, QB, fp8type, per_tensor=True
+        x.grad, BS, SL, CDIM, QB, fp8type, quant_type="per_block"
     )  # .to(bfloat16) since gradients are of bfloat16
 
     g_triton, s_triton = fp8_gelu_backward(qx, sx, g, QB, fp8type)
@@ -90,7 +90,7 @@ def _test_gelu_bwd_legacy(x, qx, sx, g, qg, sg, BS, SL, CDIM, QB):
     output_torch = torch_gelu(x)
     output_torch.backward(g)
     grad_torch, _, __ = quantize_tensor(
-        x.grad, BS, SL, CDIM, QB, qg.dtype, per_tensor=True
+        x.grad, BS, SL, CDIM, QB, qg.dtype, quant_type="per_block"
     )  # .to(bfloat16) since gradients are of bfloat16
 
     g_triton, s_triton = fp8_gelu_backward_legacy(qx, sx, qg, sg, QB)
@@ -124,7 +124,7 @@ def _test_silu_bwd(x, qx, sx, g, BS, SL, CDIM, QB, fp8type):
     output_torch.backward(g)
     grad_torch = x.grad.to(torch.bfloat16)
     grad_torch, _, __ = quantize_tensor(
-        x.grad, BS, SL, CDIM, QB, fp8type, per_tensor=True
+        x.grad, BS, SL, CDIM, QB, fp8type, quant_type="per_block"
     )  # .to(bfloat16) since gradients are of bfloat16
 
     grad_triton, _ = fp8_silu_backward(qx, sx, g, QB, fp8type)
@@ -156,7 +156,7 @@ def _test_mul_fwd(x1, qx1, sx1, x2, qx2, sx2, BS, SL, CDIM, QB):
     The output is per-tensor quantized, since it should follows a linear layer.
     """
     output_torch = x1 * x2
-    output_torch, _, _ = quantize_tensor(output_torch, BS, SL, CDIM, QB, qx1.dtype, per_tensor=True)
+    output_torch, _, _ = quantize_tensor(output_torch, BS, SL, CDIM, QB, qx1.dtype, quant_type="per_block")
 
     x_triton, s_triton, x_t_triton = fp8_mul_forward(qx1, sx1, qx2, sx2, QB)
     output_triton = dequantize_tensor(x_triton, s_triton, BS, SL, CDIM, QB)
@@ -174,7 +174,7 @@ def _test_mul_bwd(x1, qx1, sx1, x2, qx2, sx2, g, BS, SL, CDIM, QB, fp8type):
     output_torch = x1 * x2
     output_torch.backward(g)
     output_torch1 = x1.grad.to(torch.bfloat16)
-    output_torch2, _, __ = quantize_tensor(x2.grad, BS, SL, CDIM, QB, fp8type, per_tensor=True)
+    output_torch2, _, __ = quantize_tensor(x2.grad, BS, SL, CDIM, QB, fp8type, quant_type="per_block")
 
     g1_triton, (output_triton2, _) = fp8_mul_backward(qx1, sx1, qx2, sx2, g, QB, fp8type)
     output_triton1 = g1_triton

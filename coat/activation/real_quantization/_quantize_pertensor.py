@@ -103,7 +103,7 @@ def _fp8_quantize_pertensor_kernel(
     tl.store(scale_output_ptr, scale_output)
 
 
-def fp8_quantize_pertensor(x, QB, fp8type, stochastic=False):
+def fp8_quantize_pertensor(x, QB, fp8type, stochastic=False, scale_dtype=torch.bfloat16):
     # Change batched 3D input to 2D
     batched = False
     if len(x.shape) == 3:
@@ -116,7 +116,7 @@ def fp8_quantize_pertensor(x, QB, fp8type, stochastic=False):
     SN = N // QB
 
     fp8type = convert_str_to_fp8[fp8type]
-    s_y = torch.empty((M, SN), dtype=torch.bfloat16, device=x.device)
+    s_y = torch.empty((M, SN), dtype=scale_dtype, device=x.device)
     fp8MaxValue = FP8_MAX_VALUE[fp8type]  # E4M3 and E5M2 have different max value
 
     grid = lambda META: (triton.cdiv(M, META["BLOCK_M"]) * triton.cdiv(N, META["BLOCK_N"]),)

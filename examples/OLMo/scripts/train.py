@@ -1,5 +1,6 @@
 """Run this script with 'torchrun'."""
 
+import os
 import gzip
 import logging
 import sys
@@ -46,7 +47,7 @@ from olmo.util import (
     prepare_cli_environment,
 )
 
-from coat.activation.models.coat_olmo import CoatOLMo
+from coat.models.coat_olmo import CoatOLMo
 
 log = logging.getLogger("train")
 
@@ -135,12 +136,11 @@ def main(cfg: TrainConfig) -> None:
         olmo_model = CoatOLMo(cfg.model, cfg.quantize_model)
         for name, module in olmo_model.named_modules():
             module.layer_name = name
+    elif cfg.quantize_model.use_quantize_model == "fp8deepseek":
+        os.environ["COAT_FP8Linear"] = "DeepSeek"
+        olmo_model = OLMo(cfg.model)
     elif cfg.quantize_model.use_quantize_model == "fp8linear":
-        import os
-        os.environ["COAT_FP8Linear"] = "true" # I do not want to pass a new argument to OLMo... device="meta" so can not apply linear_replacer
-        os.environ["FABIT_FP8Linear"] = cfg.quantize_model.fabit
-        os.environ["FWBIT_FP8Linear"] = cfg.quantize_model.fwbit
-        os.environ["BOBIT_FP8Linear"] = cfg.quantize_model.bobit
+        os.environ["COAT_FP8Linear"] = "PerTensor" # I do not want to pass a new argument to OLMo... device="meta" so can not apply linear_replacer
         olmo_model = OLMo(cfg.model)
     else:
         olmo_model = OLMo(cfg.model)

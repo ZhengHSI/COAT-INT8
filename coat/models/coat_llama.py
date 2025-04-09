@@ -214,7 +214,8 @@ class CoatLlamaBeforeAttentionResidual(FP8CacheWeightModule):
                     self.qargs,
                 )
         else:
-            return re_x, self.att_proj(self.attn_norm(re_x))
+            x = F.rms_norm(re_x, rmsnorm_weight.shape, rmsnorm_weight)
+            return re_x, self.q_proj(x), self.k_proj(x), self.v_proj(x)
 
 
 class _CoatLlamaBeforeAttentionResidual(torch.autograd.Function):
@@ -411,7 +412,7 @@ class CoatLlamaAfterAttentionResidual(FP8CacheWeightModule):
                     self.qargs,
                 )
         else:
-            return re_x + self.attn_out(in_x), None, None
+            return re_x + self.o_proj(in_x), None, None
 
 
 class _CoatLlamaAfterAttentionResidual(torch.autograd.Function):
@@ -587,14 +588,14 @@ class CoatLlamaMLPResidual(FP8CacheWeightModule):
                     self.qargs,
                 )
         else:
-            raise NotImplementedError("Need TODO")
-            og_x = re_x
-            re_x = self.ff_norm(re_x)
-            re_x = self.ff_proj(re_x)
-            re_x = self.act(re_x)
-            re_x = self.ff_out(re_x)
-            re_x = og_x + re_x
-            return re_x, None, None
+            x = re_x
+            x = F.rms_norm(re_x, rmsnorm_weight.shape, rmsnorm_weight)
+            up_x = self.up_proj(x)
+            gate_x = self.act_fn(self.gate_proj(x))
+            x = gate_x * up_x
+            down_x = self.down_proj(x)
+            x = re_x + down_x
+            return x, None, None
 
 
 class _CoatLlamaMLPResidual(torch.autograd.Function):

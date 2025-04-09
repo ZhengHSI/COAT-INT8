@@ -3,21 +3,6 @@ export CUDA_VISIBLE_DEVICES=4,5,6,7
 export MODEL_NAME="meta-llama/Llama-2-7b-hf"
 export CONVERTED_MODEL_PATH="converted_models/llama-2-7b"
 
-SKIP=false
-if [[ "$1" == "--skip-convert" ]]; then
-    SKIP=true
-fi
-
-if [ "$SKIP" = false ]; then
-    # If you do not install coat in an editable way, change this line
-    export COAT_PATH=$(pip show fp8-coat | grep "Editable project location" | awk -F': ' '{print $2}')
-    echo "COAT package is located at: $COAT_PATH"
-
-    python $COAT_PATH/coat/activation/models/coat_llama_convert_from_hf.py \
-        --model_name $MODEL_NAME \
-        --save_path $CONVERTED_MODEL_PATH
-fi
-
 # We double the batch size here
 torchrun --nproc_per_node=4 --master_port=20001 toolbench/train/train_fp8.py \
     --model_name_or_path $MODEL_NAME  \

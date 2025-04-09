@@ -141,26 +141,82 @@ def block_quant(input, symm, bits, stochastic, epsilon, apply_quantize, layer_na
 
 
 def extract_bit(string):
-    match = re.match(r"INT(\d+)", string)  # INT8
-    if match:
-        return "integer", int(match.group(1)), None
-    match = re.match(r"E(\d+)M(\d+)", string)  # E4M3 / E5M2
-    if match:
-        Ebit, Mbit = int(match.group(1)), int(match.group(2))
+    match_int = re.match(r"INT(\d+)", string)  # INT8
+    match_mx_fp = re.match(r"MXE(\d+)M(\d+)", string)  # MXFP4 format
+    match_mx_fp_plus = re.match(r"MXE(\d+)M(\d+)_plus", string)  # MXFP4_plus format
+    match_nv_fp = re.match(r"NVE(\d+)M(\d+)", string)  # NVFP4 format
+    match_nv_fp_plus = re.match(r"NVE(\d+)M(\d+)_plus", string)  # NVFP4_plus format
+    match_float = re.match(r"E(\d+)M(\d+)", string)  # E4M3 / E5M2
+    
+    # Avoid double match. Plus is higher priority
+    if match_mx_fp_plus:
+        match_mx_fp = None
+    if match_nv_fp_plus:
+        match_nv_fp = None
+    
+    if match_int:
+        return "integer", int(match_int.group(1)), None
+    elif match_float:
+        Ebit, Mbit = int(match_float.group(1)), int(match_float.group(2))
         if Ebit == 1:
             return "integer", Mbit + 1, None
         if Mbit == 0:
-            return "floatExM0", int(match.group(1)), 0
-        return "floatExMy", int(match.group(1)), int(match.group(2))
-    match = re.match(r"DE(\d+)", string)
-    if match:
-        return "Dynamic", int(match.group(1)), None
-    match = re.match(r"ZeroD(\d+)", string)
-    if match:
-        return "ZeroDynamic", int(match.group(1)), None
+            return "floatExM0", Ebit, 0
+        return "floatExMy", Ebit, Mbit
+    elif match_mx_fp:
+        Ebit, Mbit = int(match_mx_fp.group(1)), int(match_mx_fp.group(2))
+        return "MXExMy", Ebit, Mbit
+    elif match_mx_fp_plus:
+        Ebit, Mbit = int(match_mx_fp_plus.group(1)), int(match_mx_fp_plus.group(2))
+        return "MXExMy_plus", Ebit, Mbit
+    elif match_nv_fp:
+        Ebit, Mbit = int(match_nv_fp.group(1)), int(match_nv_fp.group(2))
+        return "NVExMy", Ebit, Mbit
+    elif match_nv_fp_plus:
+        Ebit, Mbit = int(match_nv_fp_plus.group(1)), int(match_nv_fp_plus.group(2))
+        return "NVExMy_plus", Ebit, Mbit
     raise ValueError(f"{string} data format is not supported")
 
 
+def find_max_min(input, quant_type, absmax_per_block, bit1, bit2, symm = False, block_size = 32):
+
+    if quant_type == "integer":
+        Qn, Qp = -(2 ** (bit1 - 1) - 1), 2 ** (bit1 - 1) - 1
+    elif quant_type in ["floatExMy", "MXExMy", "MXExMy_plus", "NVExMy", "NVExMy_plus"]:
+        Qp = (2 - 2 ** (-bit2)) * (2 ** (2 ** (bit1 - 1)))
+        if bit1 == 4 and bit2 == 3:
+            # https://arxiv.org/pdf/2209.05433: Force it to be 448, as the principle is different
+            Qp = 448
+        if bit1 == 5 and bit2 == 2:
+            # https://arxiv.org/pdf/2209.05433: Force it to be 57344, as the principle is different
+            Qp = 57344 
+        Qn = -Qp
+    elif quant_type == "floatExM0":
+        Qp = 2 ** (2 ** (bit1 - 1) - 1)
+        Qn = -Qp
+    else:
+        raise NotImplementedError(f"{bit1} & {bit2} is not supported by quantization")
+    
+    scale_per_block = (2 * absmax_per_block) / (Qp - Qn)
+    scale_per_block = scale_per_block.to(input)
+    
+    if quant_type == "MXExMy":
+        scale_per_block = floatExM0_quantize_torch(scale_per_block, 8, stochastic=False, ceil=True) # Scaling Factor should be E8M0
+    elif quant_type == "MXExMy_plus":
+        # Scaling factor should be E8M0
+        double_scale = scale_per_block.abs().max() / torch.tensor(2 ** 127, dtype=torch.float32, device=scale_per_block.device)
+        scale_per_block = floatExM0_quantize_torch(scale_per_block / double_scale, 8, stochastic=False, ceil=True) # Scaling Factor should be E8M0
+        scale_per_block = scale_per_block * double_scale
+    elif quant_type == "NVExMy":
+        scale_per_block = floatExMy_quantize_torch(scale_per_block, 4, 3, stochastic=False, ceil=True) # Scaling Factor should be E4M3
+    elif quant_type == "NVExMy_plus":
+        # Scaling factor should be E4M3
+        double_scale = scale_per_block.abs().max() / 448
+        scale_per_block = floatExMy_quantize_torch(scale_per_block / double_scale, 4, 3, stochastic=False, ceil=True) # Scaling Factor should be E4M3
+        scale_per_block = scale_per_block * double_scale
+        
+    return scale_per_block, Qn, Qp
+    
 class SymmQuantizer(torch.autograd.function.InplaceFunction):
     @staticmethod
     def forward(ctx, input, symm, bits, stochastic, epsilon, apply_quantize=True, layer_name=None):
@@ -180,27 +236,7 @@ class SymmQuantizer(torch.autograd.function.InplaceFunction):
                 if not symm:
                     bit1 = bit1 + 1  # pretend to be asymmtric
 
-                if QuantType == "integer":
-                    Qn, Qp = -(2 ** (bit1 - 1) - 1), 2 ** (bit1 - 1) - 1
-                elif QuantType == "floatExMy":
-                    Qn, Qp = -(2 - 2 ** (-bit2)) * (2 ** (2 ** (bit1 - 1))), (2 - 2 ** (-bit2)) * (
-                        2 ** (2 ** (bit1 - 1))
-                    )
-                    if bit1 == 4 and bit2 == 3:  # E4M3
-                        Qn, Qp = -448, 448
-                    if bit1 == 5 and bit2 == 2:  # E5M2
-                        Qn, Qp = -57344, 57344
-                elif QuantType == "floatExM0":
-                    Qn, Qp = -(2 ** (2 ** (bit1 - 1))) + 1, 2 ** (2 ** (bit1 - 1))
-                elif QuantType == "Dynamic":
-                    Qn, Qp = -1, 1
-                elif QuantType == "ZeroDynamic":
-                    Qn, Qp = -1, 1
-                else:
-                    raise NotImplementedError(f"{bits} is not supported by quantization")
-                scale_per_block = (2 * absmax_per_block) / (Qp - Qn)
-                scale_per_block = scale_per_block.to(input)
-
+                scale_per_block, Qn, Qp = find_max_min(input, QuantType, absmax_per_block, bit1, bit2, symm)
                 Qinput = input / scale_per_block
 
                 if QuantType == "integer":
@@ -208,7 +244,7 @@ class SymmQuantizer(torch.autograd.function.InplaceFunction):
                         noise = Qinput.new(Qinput.shape).uniform_(-0.5, 0.5)
                         Qinput.add_(noise)
                     Qinput.clamp_(Qn, Qp).round_()
-                elif QuantType == "floatExMy":
+                elif QuantType in ["floatExMy", "MXExMy", "MXExMy_plus", "NVExMy", "NVExMy_plus"]:
                     # Qinput = floatExMy_quantize_torch(Qinput, bit1, bit2, stochastic)
                     Qinput = floatExMy_quantize_triton(Qinput, bit1, bit2, stochastic)
                 elif QuantType == "floatExM0":
@@ -224,7 +260,6 @@ class SymmQuantizer(torch.autograd.function.InplaceFunction):
                         file=open("debug.txt", "a"),
                     )
                     import IPython
-
                     IPython.embed()
                 return RQinput, Qinput, scale_per_block
 

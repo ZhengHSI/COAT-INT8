@@ -6,6 +6,7 @@ from ._division_transpose import fp8_division_transpose
 from ._quantize import fp8_quantize
 from ._quantize_pertensor import fp8_quantize_pertensor
 from ._quantize_pertensor_transpose import fp8_quantize_pertensor_transpose
+from ._quantize_perblock import fp8_quantize_perblock
 from ._transpose import fp8_transpose
 from .add_bwd import fp8_add_Ifp_Ifp_Ofp_Opt
 from .add_fwd import fp8_add_Ifp_Ifp_Ofp_Og16

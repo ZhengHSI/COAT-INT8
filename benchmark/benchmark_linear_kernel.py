@@ -16,8 +16,10 @@
 
 import torch
 import triton
+import deep_gemm
 
 from coat.activation.real_quantization.linear import fp8matmul
+
 
 
 def benchmarker(M, N, K, provider, groupsize: int = 16):
@@ -35,6 +37,15 @@ def benchmarker(M, N, K, provider, groupsize: int = 16):
     b = b.T
     b = b.to(torch.float8_e4m3fn)
 
+    # DeepSeek's input
+    QB = 128
+    ds_scale_a = torch.rand((M, K // QB), dtype=torch.float32, device="cuda")
+    ds_scale_b = torch.rand((N // QB, K // QB), dtype=torch.float32, device="cuda")
+    ds_scale_a = ds_scale_a.t().contiguous().t()
+    
+    ds_x_fp8, ds_y_fp8 = (a, ds_scale_a), (b.t(), ds_scale_b)
+    ds_out = torch.empty((M, N), dtype=torch.bfloat16, device="cuda")
+
     def torch_bf16():
         output_bf16 = torch.matmul(a16, b16)
 
@@ -43,14 +54,19 @@ def benchmarker(M, N, K, provider, groupsize: int = 16):
 
     def triton_fp8_output_quantized():
         output_fp8_y, output_fp8_s = fp8matmul(a, b, True, scale_a, scale_b, groupsize, bias=bias)
-
+        
+    def deepseek_fp8_define():
+        return deep_gemm.gemm_fp8_fp8_bf16_nt(ds_x_fp8, ds_y_fp8, ds_out)
+        
     quantiles = [0.5, 0.2, 0.8]
     if provider == "torch-bf16":
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch_bf16(), quantiles=quantiles)
+        ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch_bf16(), quantiles=quantiles, rep=500)
     elif provider == "triton-fp8-output-fp":
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: triton_fp8_output_fp(), quantiles=quantiles)
+        ms, min_ms, max_ms = triton.testing.do_bench(lambda: triton_fp8_output_fp(), quantiles=quantiles, rep=500)
     elif provider == "triton-fp8-output-quantized":
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: triton_fp8_output_quantized(), quantiles=quantiles)
+        ms, min_ms, max_ms = triton.testing.do_bench(lambda: triton_fp8_output_quantized(), quantiles=quantiles, rep=500)
+    elif provider == "deepseek-fp8":
+        ms, min_ms, max_ms = triton.testing.do_bench(lambda: deepseek_fp8_define(), quantiles=quantiles, rep=500)
 
     perf = lambda ms: 2 * M * N * K * 1e-12 / (ms * 1e-3)
     return perf(ms), perf(max_ms), perf(min_ms)
@@ -64,9 +80,9 @@ if __name__ == "__main__":
             x_names=["M", "N", "K"],
             x_vals=[512 * i for i in range(2, 17)],
             line_arg="provider",
-            line_vals=["torch-bf16", "triton-fp8-output-fp", "triton-fp8-output-quantized"],
-            line_names=["Torch-BF16", "Triton-FP8-Output-FP", "Triton-FP8-Output-Quantized"],
-            styles=[("green", "-"), ("blue", "-"), ("red", "-")],
+            line_vals=["torch-bf16", "triton-fp8-output-fp", "triton-fp8-output-quantized", "deepseek-fp8"],
+            line_names=["Torch-BF16", "Triton-FP8-Output-FP", "Triton-FP8-Output-Quantized", "Deepseek-fp8"],
+            styles=[("green", "-"), ("blue", "-"), ("red", "-"), ("orange", "-")],
             ylabel="TFLOPS",
             plot_name="matmul-performance",
             args={},

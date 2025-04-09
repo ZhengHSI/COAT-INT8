@@ -178,14 +178,21 @@ In this example, we show how to fine-tune a Llama-2 model using COAT on [ToolBen
 ### Data Preparation
 ```bash
 cd examples/ToolBench
-# Download the data ToolBench requires
+# Download the data of ToolBench, ~400 MB
+# Make sure git-lfs is installed (https://git-lfs.com)
+# Otherwise, follow the instructions here (https://gist.github.com/pourmand1376/bc48a407f781d6decae316a5cfa7d8ab) to install it without sudo
+git lfs install
 git clone https://huggingface.co/datasets/Efficient-Large-Model/COAT-ToolBench
+
 # Unzip the data
 python preprocess/unzip_finetune_data.py
+# Remove the intermediate result
+rm -rf COAT-ToolBench
 ```
 
 ### Convert the checkpoint and do FP8 Training
 ```bash
+bash scripts/llama_convert_from_hf.sh
 
 # Run COAT FP8 Training on Llama-2-7B, should achieve 2.80s/it on 8 * H100, which is 26% speedup compared with BF16 training.
 bash scripts/train_toolllama_fp8.sh
