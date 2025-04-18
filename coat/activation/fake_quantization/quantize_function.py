@@ -198,22 +198,24 @@ def find_max_min(input, quant_type, absmax_per_block, bit1, bit2, symm = False, 
         raise NotImplementedError(f"{bit1} & {bit2} is not supported by quantization")
     
     scale_per_block = (2 * absmax_per_block) / (Qp - Qn)
-    scale_per_block = scale_per_block.to(input)
+    input_dtype = input.dtype
     
     if quant_type == "MXExMy":
         scale_per_block = floatExM0_quantize_torch(scale_per_block, 8, stochastic=False, ceil=True) # Scaling Factor should be E8M0
     elif quant_type == "MXExMy_plus":
         # Scaling factor should be E8M0
-        double_scale = scale_per_block.abs().max() / torch.tensor(2 ** 127, dtype=torch.float32, device=scale_per_block.device)
+        double_scale = scale_per_block.abs().max().float() / torch.tensor(2 ** 20, dtype=torch.float32, device=scale_per_block.device)
         scale_per_block = floatExM0_quantize_torch(scale_per_block / double_scale, 8, stochastic=False, ceil=True) # Scaling Factor should be E8M0
         scale_per_block = scale_per_block * double_scale
     elif quant_type == "NVExMy":
         scale_per_block = floatExMy_quantize_torch(scale_per_block, 4, 3, stochastic=False, ceil=True) # Scaling Factor should be E4M3
     elif quant_type == "NVExMy_plus":
         # Scaling factor should be E4M3
-        double_scale = scale_per_block.abs().max() / 448
+        double_scale = scale_per_block.abs().max().float() / 448
         scale_per_block = floatExMy_quantize_torch(scale_per_block / double_scale, 4, 3, stochastic=False, ceil=True) # Scaling Factor should be E4M3
         scale_per_block = scale_per_block * double_scale
+        
+    scale_per_block = scale_per_block.to(input_dtype)
         
     return scale_per_block, Qn, Qp
     
