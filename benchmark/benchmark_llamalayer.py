@@ -18,12 +18,13 @@
 
 import pandas as pd
 import torch
+from dataclasses import asdict
 from transformers import AutoConfig, AutoModel
 from transformers.models.llama.modeling_llama import LlamaDecoderLayer
 
-from coat.activation.models._fp8manager import FP8Manager
-from coat.activation.models._fp8_quantization_config import QuantizationConfig
-from coat.activation.models.coat_llama import CoatLlamaDecoderLayer, CoatLlamaModel, make_state_dict_compatible
+from coat.utils._fp8manager import FP8Manager
+from coat.utils._fp8_quantization_config import QuantizationConfig
+from coat.models.coat_llama import CoatLlamaDecoderLayer, CoatLlamaModel, make_state_dict_compatible
 from coat.activation.real_quantization import (Coat_quantize_bgn,
                                                Coat_quantize_end)
 
@@ -150,13 +151,13 @@ def benchmarker(CHOICE, OBJECT, verbose=False):
             quantize_model=True,
             group_size=16,
         )
-        config.coat_fp8_args = fp8_config
+        config.coat_fp8_args = asdict(fp8_config)
 
         llama_layer = CoatLlamaDecoderLayer(config, layer_idx=0)
         llama_layer.load_state_dict(make_state_dict_compatible(model.layers[0].state_dict()))
 
-        llama_bgn = Coat_quantize_bgn(config.coat_fp8_args).cuda()
-        llama_end = Coat_quantize_end(config.coat_fp8_args).cuda()
+        llama_bgn = Coat_quantize_bgn(fp8_config).cuda()
+        llama_end = Coat_quantize_end(fp8_config).cuda()
         llama_layer = llama_layer.cuda().to(torch.bfloat16)
 
         # Forward Time Benchmark
@@ -183,7 +184,7 @@ def benchmarker(CHOICE, OBJECT, verbose=False):
                 if OBJECT == "SPEED":
                     FP8Manager.is_first_microbatch = True
                     dummy_x, dummy_qx, dummy_sx = llama_bgn(dummy_input)
-                    _ = llama_layer(dummy_x, dummy_qx, dummy_sx, attention_mask, position_ids)
+                    _ = llama_layer(dummy_x, dummy_qx, dummy_sx, attention_mask, position_ids)[0]
 
                     # Test Forward Time
                     with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
@@ -211,7 +212,7 @@ def benchmarker(CHOICE, OBJECT, verbose=False):
                         for i in range(n_repeat):
                             dummy_output_x, dummy_output_qx, dummy_output_sx = llama_layer(
                                 dummy_x, dummy_qx, dummy_sx, attention_mask, position_ids
-                            )
+                            )[0]
                             dummy_output = llama_end(dummy_output_x, dummy_output_qx, dummy_output_sx)
                             start_event[i].record()
                             dummy_output.backward(dummy_grad)
@@ -245,7 +246,7 @@ def benchmarker(CHOICE, OBJECT, verbose=False):
                             start_memory = torch.cuda.memory_allocated()
                             dummy_output_x, dummy_output_qx, dummy_output_sx = llama_layer(
                                 dummy_x, dummy_qx, dummy_sx, attention_mask, position_ids
-                            )
+                            )[0]
                             end_memory = torch.cuda.memory_allocated()
                             dummy_output = llama_end(dummy_output_x, dummy_output_qx, dummy_output_sx)
 

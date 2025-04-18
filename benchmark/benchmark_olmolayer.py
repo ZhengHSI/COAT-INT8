@@ -21,8 +21,8 @@ import torch
 from olmo.config import CheckpointType, TrainConfig
 from olmo.model import BufferCache, LayerNorm, OLMoSequentialBlock
 
-from coat.activation.models._fp8manager import FP8Manager
-from coat.activation.models.coat_olmo import CoatOLMoSequentialBlock
+from coat.utils._fp8manager import FP8Manager
+from coat.models.coat_olmo import CoatOLMoSequentialBlock
 from coat.activation.real_quantization import (Coat_quantize_bgn,
                                                Coat_quantize_end)
 

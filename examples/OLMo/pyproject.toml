@@ -14,7 +14,7 @@ requires-python = ">=3.8"
 license = { file = "LICENSE" }
 dependencies = [
     "numpy<2",
-    "torch>=2.1,<2.5",
+    "torch>=2.1",
     "ai2-olmo-core==0.1.0",
     "omegaconf",
     "rich",
@@ -30,9 +30,9 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "ruff",
-    "mypy>=1.0,<1.4",
-    "black>=23.1,<24.0",
-    "isort>=5.12,<5.13",
+    "mypy>=1.0",
+    "black>=23.1",
+    "isort>=5.12",
     "pytest",
     "pytest-sphinx",
     "twine>=1.11.0",

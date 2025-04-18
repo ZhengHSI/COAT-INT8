@@ -24,3 +24,9 @@ pip install -U flash-attn --no-build-isolation
 cd coat/optimizer/kernels/
 TORCH_CUDA_ARCH_LIST="8.9 9.0" python setup.py install
 
+# install DeepGEMM
+cd third_party/DeepGEMM
+python setup.py install
+
+# python -m build
+# twine upload dist/*
