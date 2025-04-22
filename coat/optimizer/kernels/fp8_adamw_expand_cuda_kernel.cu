@@ -12,7 +12,7 @@
 
 #include <stdio.h>
 
-#define QUANT_MIN_VAL 1e-20
+#define QUANT_MIN_VAL 1e-30
 
 namespace cg = cooperative_groups;
 #define WARPSIZE 32
@@ -45,16 +45,21 @@ __global__ void fp8_adamw_cuda_expand_kernel(
         int sign_exp_avg = 1 - 2 * signbit(float_exp_avg);
         float_exp_avg = sign_exp_avg * powf(fabsf(float_exp_avg), 1 / expand_exp_avg[scale_idx]) * sqrtminmax_exp_avg[scale_idx];
         float_exp_avg_sq = float(exp_avg_sq[idx]) * scale_exp_avg_sq[scale_idx];
+        // printf("idx: %d, scale_idx: %d, float_exp_avg_sq: %f, exp_avg_sq: %f, scale_exp_avg_sq: %f\n", idx, scale_idx, float_exp_avg_sq, exp_avg_sq[idx], scale_exp_avg_sq[scale_idx]);
         float_exp_avg_sq = powf(float_exp_avg_sq, 1 / expand_exp_avg_sq[scale_idx]) * sqrtminmax_exp_avg_sq[scale_idx];
 
         // calculation of optimizer.step()
         float_exp_avg = beta1 * float_exp_avg + (1 - beta1) * grads[idx];
+
+        // printf("idx: %d, beta2: %f, float_exp_avg_sq: %f, grads: %f\n", idx, beta1, float_exp_avg_sq, grads[idx]);
         float_exp_avg_sq = beta2 * float_exp_avg_sq + (1 - beta2) * grads[idx] * grads[idx];
 
         correction1 = 1.0f - powf(beta1, step);
         correction2_sqrt = sqrtf(1.0f - powf(beta2, step));
+        // printf("idx: %d, beta2: %f, step: %d, correction2_sqrt: %f, eps: %f\n", idx, beta2, step, correction2_sqrt, eps);
 
         denom = (sqrtf(float_exp_avg_sq) / correction2_sqrt + eps) * correction1;
+        // printf("idx: %d, denom: %f, float_exp_avg_sq: %f, correction2_sqrt: %f, eps: %f\n", idx, denom, float_exp_avg_sq, correction2_sqrt, eps);
         update = (float_exp_avg / denom) + (wd * params[idx]);
         params[idx] = params[idx] - (lr * update);
     } else {
@@ -86,10 +91,14 @@ __global__ void fp8_adamw_cuda_expand_kernel(
         float reduceFirstMinVal = warpTile.shfl_down(firstMinVal, i);
         float reduceSecondMaxVal = warpTile.shfl_down(secondMaxVal, i);
         float reduceSecondMinVal = warpTile.shfl_down(secondMinVal, i);
+
+        // Skip zero values when computing minimum
         firstMaxVal = fmax(firstMaxVal, fabsf(reduceFirstMaxVal));
-        firstMinVal = fmin(firstMinVal, fabsf(reduceFirstMinVal));
+        float absReduceFirstMinVal = fabsf(reduceFirstMinVal);
+        firstMinVal = (absReduceFirstMinVal > 0) ? fmin(firstMinVal, absReduceFirstMinVal) : firstMinVal;
         secondMaxVal = fmax(secondMaxVal, fabsf(reduceSecondMaxVal));
-        secondMinVal = fmin(secondMinVal, fabsf(reduceSecondMinVal));
+        float absReduceSecondMinVal = fabsf(reduceSecondMinVal);
+        secondMinVal = (absReduceSecondMinVal > 0) ? fmin(secondMinVal, absReduceSecondMinVal) : secondMinVal;
         // printf("First Max: %f\n", reduceFirstMaxVal);
     }
     int lane = warpTile.thread_rank();
@@ -117,10 +126,14 @@ __global__ void fp8_adamw_cuda_expand_kernel(
             float reduceFirstMinVal = __shfl_down_sync(0xFFFFFFFF, firstMinVal, offset);
             float reduceSecondMaxVal = __shfl_down_sync(0xFFFFFFFF, secondMaxVal, offset);
             float reduceSecondMinVal = __shfl_down_sync(0xFFFFFFFF, secondMinVal, offset);
+
+            // Skip zero values when computing minimum
             firstMaxVal = fmax(firstMaxVal, fabsf(reduceFirstMaxVal));
-            firstMinVal = fmin(firstMinVal, fabsf(reduceFirstMinVal));
+            float absReduceFirstMinVal = fabsf(reduceFirstMinVal);
+            firstMinVal = (absReduceFirstMinVal > 0) ? fmin(firstMinVal, absReduceFirstMinVal) : firstMinVal;
             secondMaxVal = fmax(secondMaxVal, fabsf(reduceSecondMaxVal));
-            secondMinVal = fmin(secondMinVal, fabsf(reduceSecondMinVal));
+            float absReduceSecondMinVal = fabsf(reduceSecondMinVal);
+            secondMinVal = (absReduceSecondMinVal > 0) ? fmin(secondMinVal, absReduceSecondMinVal) : secondMinVal;
         }
         if (lane == 0) {
             shared_absmax_exp_avg = firstMaxVal;
@@ -142,19 +155,22 @@ __global__ void fp8_adamw_cuda_expand_kernel(
         firstMinVal = shared_absmin_exp_avg + QUANT_MIN_VAL;
         secondMaxVal = shared_absmax_exp_avg_sq + QUANT_MIN_VAL;
         secondMinVal = shared_absmin_exp_avg_sq + QUANT_MIN_VAL;
+        // printf("idx: %d |\n    secondMinVal: %.32f\n    secondMaxVal: %.32f\n    shared_absmax_exp_avg_sq: %.32f\n    shared_absmin_exp_avg_sq: %.32f\n    QUANT_MIN_VAL: %.32f\n", \
+        //     idx, secondMinVal, secondMaxVal, shared_absmax_exp_avg_sq, shared_absmin_exp_avg_sq, QUANT_MIN_VAL);
 
         // calculate the ratio and make the scale to center
         float firstRatio = firstMaxVal / firstMinVal;
         float secondRatio = secondMaxVal / secondMinVal;
-        float firstSqrtMinMax = sqrt(firstMaxVal * firstMinVal);
-        float secondSqrtMinMax = sqrt(secondMaxVal * secondMinVal);
+        float firstSqrtMinMax = sqrt(firstMaxVal) * sqrt(firstMinVal);
+        float secondSqrtMinMax = sqrt(secondMaxVal) * sqrt(secondMinVal);
 
-        // printf("Max %f, Min %f, Origin %f \n", firstMaxVal, firstMinVal, float_exp_avg);
+        // printf("idx: %d | Second Sqrt Min Max: %.32f    Second Max: %.32f    Second Min: %.32f\n", idx, secondSqrtMinMax, secondMaxVal, secondMinVal);
 
         // since we use x^k expander, calculate the optimal expanding factor
         float ratioUpperBound = fp8MaxVal * fp8MaxVal / 2;
         float firstExp = floor((log2f(ratioUpperBound) / log2f(firstRatio)) * expand_min) / expand_min; // expand_min is set to 8 for example, then the firstExp is the multiple of 1/8
         float secondExp = floor((log2f(ratioUpperBound) / log2f(secondRatio)) * expand_min) / expand_min;
+        // printf("idx: %d | secondExp: %.10f    secondRatio: %.10f    ratioUpperBound: %.10f    expand_min: %d\n", idx, secondExp, secondRatio, ratioUpperBound, expand_min);
 
         int sign_exp_avg = 1 - 2 * signbit(float_exp_avg);
         float_exp_avg = sign_exp_avg * powf(fabsf(float_exp_avg) / firstSqrtMinMax, firstExp);
@@ -163,6 +179,8 @@ __global__ void fp8_adamw_cuda_expand_kernel(
         // correspondingly, change the scaling factor
         float new_scale_exp_avg = powf(firstMaxVal / firstSqrtMinMax, firstExp) / fp8MaxVal;
         float new_scale_exp_avg_sq = powf(secondMaxVal / secondSqrtMinMax, secondExp) / fp8MaxVal;
+        // printf("idx: %d | new_scale_exp_avg_sq: %.32f    secondMaxVal: %.32f    secondSqrtMinMax: %.32f    secondExp: %.32f    fp8MaxVal: %.32f\n", \
+        //     idx, new_scale_exp_avg_sq, secondMaxVal, secondSqrtMinMax, secondExp, fp8MaxVal);
 
         // quantize the optimizer states
         __nv_fp8_e4m3 exp_avg_new = static_cast<__nv_fp8_e4m3>(float_exp_avg / new_scale_exp_avg);
@@ -170,7 +188,7 @@ __global__ void fp8_adamw_cuda_expand_kernel(
         // __half exp_avg_new = static_cast<__half>(float_exp_avg / new_scale_exp_avg);
         // __half exp_avg_sq_new = static_cast<__half>(float_exp_avg_sq / new_scale_exp_avg_sq);
 
-        // printf("idx: %d, float: %f, quantize: %f\n", idx, float_exp_avg, (float)exp_avg_new * new_scale_exp_avg);
+        // printf("idx: %d | float: %.32f    quantize: %.32f\n", idx, float_exp_avg, (float)exp_avg_new * new_scale_exp_avg);
 
         // store the output
         exp_avg[idx] = exp_avg_new;
