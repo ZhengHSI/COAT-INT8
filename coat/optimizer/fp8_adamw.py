@@ -476,16 +476,6 @@ def _single_tensor_Coatadamw(
             expand_exp_avg_sq = expand_exp_avg_sqs[i]
             sqrt_minmax_exp_avg_sq = sqrt_minmax_exp_avg_sqs[i]
 
-            orig_exp_avg = exp_avg.clone()
-            orig_exp_avg_sq = exp_avg_sq.clone()
-            orig_scale_exp_avg = scale_exp_avg.clone()
-            orig_scale_exp_avg_sq = scale_exp_avg_sq.clone()
-            orig_expand_exp_avg = expand_exp_avg.clone()
-            orig_expand_exp_avg_sq = expand_exp_avg_sq.clone()
-            orig_sqrt_minmax_exp_avg = sqrt_minmax_exp_avg.clone()
-            orig_sqrt_minmax_exp_avg_sq = sqrt_minmax_exp_avg_sq.clone()
-            orig_param = param.clone()
-
             qoptim_cuda.fp8_adamw_expand_step(
                 param,
                 grad,
@@ -507,19 +497,6 @@ def _single_tensor_Coatadamw(
                 expand_min,
             )
 
-            if scale_exp_avg_sq.numel() == 2052096:
-                print(scale_exp_avg_sq.max())
-                if scale_exp_avg_sq.max() > 1e5:
-                    import IPython
-                    IPython.embed()
-                
-                if exp_avg_sq.float().max(dim=-1)[0].min() == 0:
-                    import IPython
-                    IPython.embed()
-
-            if any(torch.isnan(tensor).any() or torch.isinf(tensor).any() for tensor in [param, grad, exp_avg.float(), scale_exp_avg, expand_exp_avg, sqrt_minmax_exp_avg, exp_avg_sq.float(), scale_exp_avg_sq, expand_exp_avg_sq, sqrt_minmax_exp_avg_sq]):
-                import IPython
-                IPython.embed()
         else:
             qoptim_cuda.fp8_adamw_step(
                 param,
