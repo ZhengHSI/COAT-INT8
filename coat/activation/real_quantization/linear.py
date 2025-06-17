@@ -300,3 +300,94 @@ def fp8_linear_backward(
         return y, s_y, w_g
     else:
         return y, w_g
+
+
+@triton.jit
+def _int8matmul_kernel(
+    A_ptr, B_ptr, C_ptr,
+    M: tl.constexpr, N: tl.constexpr, K: tl.constexpr,
+    stride_am, stride_ak,
+    stride_bk, stride_bn,
+    stride_cm, stride_cn,
+    scale_a_ptr, scale_b_ptr, scale_c_ptr,
+    add_bias: tl.constexpr, BIAS_ptr,
+    BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr
+):
+    pid_m = tl.program_id(0)
+    pid_n = tl.program_id(1)
+
+    offs_m = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
+    offs_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+    offs_k = tl.arange(0, BLOCK_K)
+
+    acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
+
+    for k in range(0, K, BLOCK_K):
+        k_remaining = min(BLOCK_K, K - k)
+        a = tl.load(
+            A_ptr + (offs_m[:, None] * stride_am + (k + offs_k[None, :]) * stride_ak),
+            mask=(offs_m[:, None] < M) & ((k + offs_k[None, :]) < K),
+            other=0
+        )
+        b = tl.load(
+            B_ptr + ((k + offs_k[:, None]) * stride_bk + offs_n[None, :] * stride_bn),
+            mask=((k + offs_k[:, None]) < K) & (offs_n[None, :] < N),
+            other=0
+        )
+        acc += tl.dot(a, b)
+
+    # 反量化
+    scale_a = tl.load(scale_a_ptr)
+    scale_b = tl.load(scale_b_ptr)
+    scale_c = tl.load(scale_c_ptr)
+    acc = acc * scale_a * scale_b / scale_c
+
+    if add_bias:
+        bias = tl.load(BIAS_ptr + offs_n, mask=offs_n < N, other=0.0)
+        acc = acc + bias[None, :]
+
+    # 写回
+    tl.store(
+        C_ptr + offs_m[:, None] * stride_cm + offs_n[None, :] * stride_cn,
+        acc,
+        mask=(offs_m[:, None] < M) & (offs_n[None, :] < N)
+    )
+
+
+def int8matmul(a, b, scale_a, scale_b, scale_c, bias=None, BLOCK_M=128, BLOCK_N=128, BLOCK_K=64):
+    """
+    a: [M, K] int8
+    b: [K, N] int8
+    scale_a, scale_b, scale_c: float标量
+    bias: [N] float32 or None
+    返回: [M, N] float32
+    """
+    assert a.dtype == torch.int8 and b.dtype == torch.int8
+    M, K = a.shape
+    K2, N = b.shape
+    assert K == K2
+
+    c = torch.empty((M, N), device=a.device, dtype=torch.float32)
+    grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
+
+    add_bias = bias is not None
+    if bias is None:
+        bias = a.new_zeros(N, dtype=torch.float32)
+
+    # 量化scale转为1元素tensor
+    scale_a_t = torch.tensor([scale_a], device=a.device, dtype=torch.float32)
+    scale_b_t = torch.tensor([scale_b], device=a.device, dtype=torch.float32)
+    scale_c_t = torch.tensor([scale_c], device=a.device, dtype=torch.float32)
+
+    _int8matmul_kernel[grid](
+        a, b, c,
+        M, N, K,
+        a.stride(0), a.stride(1),
+        b.stride(0), b.stride(1),
+        c.stride(0), c.stride(1),
+        scale_a_t, scale_b_t, scale_c_t,
+        add_bias, bias,
+        BLOCK_M, BLOCK_N, BLOCK_K,
+        num_warps=4,
+    )
+    return c
