@@ -303,7 +303,7 @@ def fp8_linear_backward(
 
 
 @triton.jit
-def _int8matmul_kernel(
+def int8_matmul_kernel(
     A_ptr, B_ptr, C_ptr,
     M: tl.constexpr, N: tl.constexpr, K: tl.constexpr,
     stride_am, stride_ak,
@@ -318,20 +318,18 @@ def _int8matmul_kernel(
 
     offs_m = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
     offs_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
-    offs_k = tl.arange(0, BLOCK_K)
-
-    acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
+    acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.int32)
 
     for k in range(0, K, BLOCK_K):
-        k_remaining = min(BLOCK_K, K - k)
+        offs_k = k + tl.arange(0, BLOCK_K)
         a = tl.load(
-            A_ptr + (offs_m[:, None] * stride_am + (k + offs_k[None, :]) * stride_ak),
-            mask=(offs_m[:, None] < M) & ((k + offs_k[None, :]) < K),
+            A_ptr + (offs_m[:, None] * stride_am + offs_k[None, :] * stride_ak),
+            mask=(offs_m[:, None] < M) & (offs_k[None, :] < K),
             other=0
         )
         b = tl.load(
-            B_ptr + ((k + offs_k[:, None]) * stride_bk + offs_n[None, :] * stride_bn),
-            mask=((k + offs_k[:, None]) < K) & (offs_n[None, :] < N),
+            B_ptr + (offs_k[:, None] * stride_bk + offs_n[None, :] * stride_bn),
+            mask=(offs_k[:, None] < K) & (offs_n[None, :] < N),
             other=0
         )
         acc += tl.dot(a, b)
@@ -340,28 +338,20 @@ def _int8matmul_kernel(
     scale_a = tl.load(scale_a_ptr)
     scale_b = tl.load(scale_b_ptr)
     scale_c = tl.load(scale_c_ptr)
-    acc = acc * scale_a * scale_b / scale_c
+    acc_fp32 = acc.to(tl.float32) * scale_a * scale_b / scale_c
 
     if add_bias:
         bias = tl.load(BIAS_ptr + offs_n, mask=offs_n < N, other=0.0)
-        acc = acc + bias[None, :]
+        acc_fp32 = acc_fp32 + bias[None, :]
 
-    # 写回
     tl.store(
         C_ptr + offs_m[:, None] * stride_cm + offs_n[None, :] * stride_cn,
-        acc,
+        acc_fp32,
         mask=(offs_m[:, None] < M) & (offs_n[None, :] < N)
     )
 
 
 def int8matmul(a, b, scale_a, scale_b, scale_c, bias=None, BLOCK_M=128, BLOCK_N=128, BLOCK_K=64):
-    """
-    a: [M, K] int8
-    b: [K, N] int8
-    scale_a, scale_b, scale_c: float标量
-    bias: [N] float32 or None
-    返回: [M, N] float32
-    """
     assert a.dtype == torch.int8 and b.dtype == torch.int8
     M, K = a.shape
     K2, N = b.shape
@@ -374,12 +364,11 @@ def int8matmul(a, b, scale_a, scale_b, scale_c, bias=None, BLOCK_M=128, BLOCK_N=
     if bias is None:
         bias = a.new_zeros(N, dtype=torch.float32)
 
-    # 量化scale转为1元素tensor
     scale_a_t = torch.tensor([scale_a], device=a.device, dtype=torch.float32)
     scale_b_t = torch.tensor([scale_b], device=a.device, dtype=torch.float32)
     scale_c_t = torch.tensor([scale_c], device=a.device, dtype=torch.float32)
 
-    _int8matmul_kernel[grid](
+    int8_matmul_kernel[grid](
         a, b, c,
         M, N, K,
         a.stride(0), a.stride(1),
@@ -391,3 +380,37 @@ def int8matmul(a, b, scale_a, scale_b, scale_c, bias=None, BLOCK_M=128, BLOCK_N=
         num_warps=4,
     )
     return c
+
+
+def int8_linear_forward(x, s, w, s_w, bias=None):
+    """
+    int8 线性前向：x @ w^T，输入和权重均为 int8，输出 float32
+    x: [M, K] int8
+    s: x 的 scale (float/tensor)
+    w: [N, K] int8
+    s_w: w 的 scale (float/tensor)
+    bias: [N] float32 or None
+    返回: [M, N] float32
+    """
+    w_t = w.t()
+    return int8matmul(x, w_t, s, s_w, 1.0, bias)
+
+
+def int8_linear_backward(x_t, s, g, s_g, g_t, w_t, s_w, bias=None):
+    """
+    int8 线性反向：用于反向传播
+    x_t: int8 输入（转置）
+    s: x_t 的 scale
+    g: int8 梯度
+    s_g: g 的 scale
+    g_t: int8 梯度（转置）
+    w_t: int8 权重（转置）
+    s_w: w_t 的 scale
+    bias: 可选 bias
+    返回: y, w_g
+    """
+    # y = g @ w_t^T
+    y = int8matmul(g, w_t.t(), s_g, s_w, 1.0, bias)
+    # w_g = g_t @ x_t^T
+    w_g = int8matmul(g_t, x_t.t(), s_g, s, 1.0)
+    return y, w_g
