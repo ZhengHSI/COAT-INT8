@@ -25,7 +25,7 @@ try:
                          convert_str_to_fp8)
 except:
     from common import SCALE_MIN_THRES, FP8_MAX_VALUE, convert_str_to_fp8, convert_fp8_to_embit
-    from COAT.coat.activation.real_quantization._division import _stochastic_rounding
+    from coat.activation.real_quantization._division import _stochastic_rounding
 
 import os
 import time
