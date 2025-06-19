@@ -262,7 +262,7 @@ def plot_performance_curves(size_results):
                    for size in sizes]
         ax5.plot(sizes, speedups, marker='o', label=prec)
     ax5.set_xlabel("Matrix Size")
-    ax5.set_ylabel("相对FP32加速比")
+    ax5.set_ylabel("Speedup over FP32")
     ax5.set_title("Old Method: vs FP32")
     ax5.grid(True)
     ax5.legend()
@@ -273,7 +273,7 @@ def plot_performance_curves(size_results):
                    for size in sizes]
         ax6.plot(sizes, speedups, marker='o', label=prec)
     ax6.set_xlabel("Matrix Size")
-    ax6.set_ylabel("相对FP16加速比")
+    ax6.set_ylabel("Speedup over FP16")
     ax6.set_title("Old Method: vs FP16")
     ax6.grid(True)
     ax6.legend()
