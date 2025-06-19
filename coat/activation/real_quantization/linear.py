@@ -38,11 +38,11 @@ import time
 
 def get_configs_io_block():
     configs = []
-    for nstages in [3]:
-        for block_m in [128, 256]:
-            for block_n in [128, 256]:
-                for block_k in [128, 256]:
-                    for nwarps in [8]:
+    for nstages in [3]:  # 增加流水线级数选项
+        for block_m in [64, 128, 256]:  # 增加更多block size选项
+            for block_n in [64, 128, 256]:
+                for block_k in [32, 64, 128, 256]:
+                    for nwarps in [8]:  # 增加更多warp数选项
                         configs.append(
                             triton.Config(
                                 {"BLOCK_M": block_m, "BLOCK_N": block_n, "BLOCK_K": block_k},
@@ -53,10 +53,10 @@ def get_configs_io_block():
     return configs
 
 
-# @triton.autotune(
-#     configs=get_configs_io_block(),
-#     key=["M", "N", "K"],
-# )
+@triton.autotune(
+    configs=get_configs_io_block(),
+    key=["M", "N", "K"],
+)
 @triton.jit
 def _fp8matmul_kernel(
     A,
@@ -201,27 +201,17 @@ def fp8matmul(a, b, output_quantize, scale_a, scale_b, QB, bias=None, stochastic
     else:
         noise = None
 
-    # 1D launch kernel where each block gets its own program.
+    # 1D launch kernel where each block gets its own program
     grid = lambda META: (triton.cdiv(M, META["BLOCK_M"]) * triton.cdiv(N, META["BLOCK_N"]),)
+    
     _fp8matmul_kernel[grid](
-        a,
-        b,
-        c,
-        noise,  #
-        M,
-        N,
-        K,  #
-        a.stride(0),
-        a.stride(1),  #
-        b.stride(0),
-        b.stride(1),  #
-        c.stride(0),
-        c.stride(1),  #
-        scale_a,
-        scale_b,
-        scale_c,
-        scale_c.stride(0),
-        scale_c.stride(1),
+        a, b, c, noise,  
+        M, N, K,  
+        a.stride(0), a.stride(1),  
+        b.stride(0), b.stride(1),  
+        c.stride(0), c.stride(1),  
+        scale_a, scale_b, scale_c,
+        scale_c.stride(0), scale_c.stride(1),
         output_quantize=output_quantize,
         QB=QB,
         BIAS=bias,
@@ -230,12 +220,7 @@ def fp8matmul(a, b, output_quantize, scale_a, scale_b, QB, bias=None, stochastic
         m_bit=m_bit,
         SCALE_MIN_THRES=SCALE_MIN_THRES,
         STOCHASTIC=stochastic,
-        BLOCK_M=128,
-        BLOCK_N=256,
-        BLOCK_K=128,
-        GROUP_M=8,
-        num_stages=3,
-        num_warps=8,
+        GROUP_M=8  # 只保留GROUP_M参数
     )
     # Reshape output to batch
     if batched:
@@ -302,6 +287,10 @@ def fp8_linear_backward(
         return y, w_g
 
 
+@triton.autotune(
+    configs=get_configs_io_block(),
+    key=["M", "N", "K"],
+)
 @triton.jit
 def int8_matmul_kernel(
     A_ptr, B_ptr, C_ptr,
@@ -311,63 +300,83 @@ def int8_matmul_kernel(
     stride_cm, stride_cn,
     scale_a_ptr, scale_b_ptr, scale_c_ptr,
     add_bias: tl.constexpr, BIAS_ptr,
-    BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr
+    BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
+    GROUP_M: tl.constexpr,
 ):
-    pid_m = tl.program_id(0)
-    pid_n = tl.program_id(1)
-
-    offs_m = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
-    offs_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+    # matrix multiplication
+    pid = tl.program_id(0)
+    grid_m = tl.cdiv(M, BLOCK_M)
+    grid_n = tl.cdiv(N, BLOCK_N)
+    
+    # re-order program ID for better L2 performance
+    width = GROUP_M * grid_n
+    group_id = pid // width
+    group_size = min(grid_m - group_id * GROUP_M, GROUP_M)
+    pid_m = group_id * GROUP_M + (pid % group_size)
+    pid_n = (pid % width) // (group_size)
+    
+    # do matrix multiplication
+    rm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
+    rn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+    ram = tl.max_contiguous(tl.multiple_of(rm % M, BLOCK_M), BLOCK_M)
+    rbn = tl.max_contiguous(tl.multiple_of(rn % N, BLOCK_N), BLOCK_N)
+    rk = tl.arange(0, BLOCK_K)
+    
+    # pointers
+    A = A_ptr + (ram[:, None] * stride_am + rk[None, :] * stride_ak)
+    B = B_ptr + (rk[:, None] * stride_bk + rbn[None, :] * stride_bn)
     acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.int32)
-
-    for k in range(0, K, BLOCK_K):
-        offs_k = k + tl.arange(0, BLOCK_K)
-        a = tl.load(
-            A_ptr + (offs_m[:, None] * stride_am + offs_k[None, :] * stride_ak),
-            mask=(offs_m[:, None] < M) & (offs_k[None, :] < K),
-            other=0
-        )
-        b = tl.load(
-            B_ptr + (offs_k[:, None] * stride_bk + offs_n[None, :] * stride_bn),
-            mask=(offs_k[:, None] < K) & (offs_n[None, :] < N),
-            other=0
-        )
-        acc += tl.dot(a, b)
-
+    
+    for k in range(0, tl.cdiv(K, BLOCK_K)):
+        k_remaining = K - k * BLOCK_K
+        a = tl.load(A, mask=rk[None, :] < k_remaining, other=0)
+        b = tl.load(B, mask=rk[:, None] < k_remaining, other=0)
+        
+        acc = tl.dot(a, b, acc)
+        
+        A += BLOCK_K * stride_ak
+        B += BLOCK_K * stride_bk
+    
     # 反量化
     scale_a = tl.load(scale_a_ptr)
     scale_b = tl.load(scale_b_ptr)
     scale_c = tl.load(scale_c_ptr)
     acc_fp32 = acc.to(tl.float32) * scale_a * scale_b / scale_c
-
+    
     if add_bias:
-        bias = tl.load(BIAS_ptr + offs_n, mask=offs_n < N, other=0.0)
+        # rematerialize rn to save registers
+        rn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+        bias = tl.load(BIAS_ptr + rn, mask=rn < N, other=0.0)
         acc_fp32 = acc_fp32 + bias[None, :]
+    
+    # rematerialize rm and rn to save registers
+    rm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
+    rn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+    C = C_ptr + (rm[:, None] * stride_cm + rn[None, :] * stride_cn)
+    mask = (rm < M)[:, None] & (rn < N)[None, :]
+    
+    tl.store(C, acc_fp32, mask=mask)
 
-    tl.store(
-        C_ptr + offs_m[:, None] * stride_cm + offs_n[None, :] * stride_cn,
-        acc_fp32,
-        mask=(offs_m[:, None] < M) & (offs_n[None, :] < N)
-    )
-
-
-def int8matmul(a, b, scale_a, scale_b, scale_c, bias=None, BLOCK_M=128, BLOCK_N=128, BLOCK_K=64):
+def int8matmul(a, b, scale_a, scale_b, scale_c, bias=None):
     assert a.dtype == torch.int8 and b.dtype == torch.int8
     M, K = a.shape
     K2, N = b.shape
     assert K == K2
-
+    assert a.is_contiguous(), "Matrix A must be contiguous"
+    
     c = torch.empty((M, N), device=a.device, dtype=torch.float32)
-    grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
-
+    
+    # 1D launch kernel where each block gets its own program
+    grid = lambda META: (triton.cdiv(M, META["BLOCK_M"]) * triton.cdiv(N, META["BLOCK_N"]),)
+    
     add_bias = bias is not None
     if bias is None:
         bias = a.new_zeros(N, dtype=torch.float32)
-
+        
     scale_a_t = torch.tensor([scale_a], device=a.device, dtype=torch.float32)
     scale_b_t = torch.tensor([scale_b], device=a.device, dtype=torch.float32)
     scale_c_t = torch.tensor([scale_c], device=a.device, dtype=torch.float32)
-
+    
     int8_matmul_kernel[grid](
         a, b, c,
         M, N, K,
@@ -376,8 +385,7 @@ def int8matmul(a, b, scale_a, scale_b, scale_c, bias=None, BLOCK_M=128, BLOCK_N=
         c.stride(0), c.stride(1),
         scale_a_t, scale_b_t, scale_c_t,
         add_bias, bias,
-        BLOCK_M, BLOCK_N, BLOCK_K,
-        num_warps=4,
+        GROUP_M=8  # 只保留GROUP_M参数
     )
     return c
 
