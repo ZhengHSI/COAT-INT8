@@ -422,3 +422,154 @@ def int8_linear_backward(x_t, s, g, s_g, g_t, w_t, s_w, bias=None):
     # w_g = g_t @ x_t^T
     w_g = int8matmul(g_t, x_t.t(), s_g, s, 1.0)
     return y, w_g
+
+
+
+# ... existing code ...
+
+@triton.autotune(
+    configs=get_configs_io_block(),
+    key=["M", "N", "K"],
+)
+@triton.jit
+def w8a16_matmul_kernel(
+    A_ptr, B_ptr, C_ptr,
+    M: tl.constexpr, N: tl.constexpr, K: tl.constexpr,
+    stride_am, stride_ak,
+    stride_bk, stride_bn,
+    stride_cm, stride_cn,
+    scale_b_ptr, scale_c_ptr,
+    add_bias: tl.constexpr, BIAS_ptr,
+    BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
+    GROUP_M: tl.constexpr,
+):
+    # matrix multiplication
+    pid = tl.program_id(0)
+    grid_m = tl.cdiv(M, BLOCK_M)
+    grid_n = tl.cdiv(N, BLOCK_N)
+    
+    # re-order program ID for better L2 performance
+    width = GROUP_M * grid_n
+    group_id = pid // width
+    group_size = min(grid_m - group_id * GROUP_M, GROUP_M)
+    pid_m = group_id * GROUP_M + (pid % group_size)
+    pid_n = (pid % width) // (group_size)
+    
+    # do matrix multiplication
+    rm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
+    rn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+    ram = tl.max_contiguous(tl.multiple_of(rm % M, BLOCK_M), BLOCK_M)
+    rbn = tl.max_contiguous(tl.multiple_of(rn % N, BLOCK_N), BLOCK_N)
+    rk = tl.arange(0, BLOCK_K)
+    
+    # pointers
+    A = A_ptr + (ram[:, None] * stride_am + rk[None, :] * stride_ak)
+    B = B_ptr + (rk[:, None] * stride_bk + rbn[None, :] * stride_bn)
+    acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
+    
+    for k in range(0, tl.cdiv(K, BLOCK_K)):
+        k_remaining = K - k * BLOCK_K
+        a = tl.load(A, mask=rk[None, :] < k_remaining, other=0.0)  # fp16/bf16
+        b = tl.load(B, mask=rk[:, None] < k_remaining, other=0)    # int8
+        
+        # 将int8转换为float32进行乘法
+        b_fp32 = b.to(tl.float32)
+        acc = tl.dot(a, b_fp32, acc)
+        
+        A += BLOCK_K * stride_ak
+        B += BLOCK_K * stride_bk
+    
+    # 反量化权重
+    scale_b = tl.load(scale_b_ptr)
+    scale_c = tl.load(scale_c_ptr)
+    acc = acc * scale_b / scale_c
+    
+    if add_bias:
+        # rematerialize rn to save registers
+        rn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+        bias = tl.load(BIAS_ptr + rn, mask=rn < N, other=0.0)
+        acc = acc + bias[None, :]
+    
+    # rematerialize rm and rn to save registers
+    rm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
+    rn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+    C = C_ptr + (rm[:, None] * stride_cm + rn[None, :] * stride_cn)
+    mask = (rm < M)[:, None] & (rn < N)[None, :]
+    
+    tl.store(C, acc, mask=mask)
+
+
+def w8a16matmul(a, b, scale_b, scale_c, bias=None):
+    """
+    w8a16矩阵乘法：激活值使用fp16/bf16，权重使用int8
+    a: [M, K] fp16/bf16 激活值
+    b: [K, N] int8 权重
+    scale_b: 权重的scale (float/tensor)
+    scale_c: 输出的scale (float/tensor)
+    bias: [N] float32 or None
+    返回: [M, N] float32
+    """
+    assert b.dtype == torch.int8, f"权重必须是int8类型，当前是{b.dtype}"
+    assert a.dtype in [torch.float16, torch.bfloat16], f"激活值必须是fp16或bf16类型，当前是{a.dtype}"
+    
+    M, K = a.shape
+    K2, N = b.shape
+    assert K == K2, f"矩阵维度不匹配: A[{M}, {K}] @ B[{K2}, {N}]"
+    assert a.is_contiguous(), "矩阵A必须连续"
+    assert b.is_contiguous(), "矩阵B必须连续"
+    
+    c = torch.empty((M, N), device=a.device, dtype=torch.float32)
+    
+    # 1D launch kernel where each block gets its own program
+    grid = lambda META: (triton.cdiv(M, META["BLOCK_M"]) * triton.cdiv(N, META["BLOCK_N"]),)
+    
+    add_bias = bias is not None
+    if bias is None:
+        bias = a.new_zeros(N, dtype=torch.float32)
+        
+    scale_b_t = torch.tensor([scale_b], device=a.device, dtype=torch.float32)
+    scale_c_t = torch.tensor([scale_c], device=a.device, dtype=torch.float32)
+    
+    w8a16_matmul_kernel[grid](
+        a, b, c,
+        M, N, K,
+        a.stride(0), a.stride(1),
+        b.stride(0), b.stride(1),
+        c.stride(0), c.stride(1),
+        scale_b_t, scale_c_t,
+        add_bias, bias,
+        GROUP_M=8
+    )
+    return c
+
+
+def w8a16_linear_forward(x, w, s_w, bias=None):
+    """
+    w8a16线性前向：x @ w^T，激活值使用fp16/bf16，权重使用int8
+    x: [M, K] fp16/bf16 激活值
+    w: [N, K] int8 权重
+    s_w: w 的 scale (float/tensor)
+    bias: [N] float32 or None
+    返回: [M, N] float32
+    """
+    w_t = w.t()
+    return w8a16matmul(x, w_t, s_w, 1.0, bias)
+
+
+def w8a16_linear_backward(x_t, g, g_t, w_t, s_w, bias=None):
+    """
+    w8a16线性反向：用于反向传播
+    x_t: fp16/bf16 输入（转置）
+    g: fp16/bf16 梯度
+    g_t: fp16/bf16 梯度（转置）
+    w_t: int8 权重（转置）
+    s_w: w_t 的 scale
+    bias: 可选 bias
+    返回: y, w_g
+    """
+    # y = g @ w_t^T
+    y = w8a16matmul(g, w_t.t(), s_w, 1.0, bias)
+    # w_g = g_t @ x_t^T (这里需要特殊处理，因为g_t是fp16/bf16，x_t也是fp16/bf16)
+    # 对于权重梯度，我们通常使用fp16/bf16精度
+    w_g = torch.matmul(g_t, x_t.t())
+    return y, w_g
